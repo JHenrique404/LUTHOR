@@ -152,6 +152,69 @@ describe('SimulationEngine', () => {
     expect(events.length).toBe(count)
   })
 
+  it('Nova tarefa (fluxo padrão) cria run novo que progride até completed', () => {
+    const { engine } = createEngine()
+    engine.start()
+    const snapshot = engine.startNewRun({ text: 'Melhorar onboarding', mode: 'standard' })
+
+    expect(snapshot.run.id).not.toBe('run-auth-demo')
+    expect(snapshot.run.state).toBe('running')
+    expect(snapshot.task.title).toBe('Melhorar onboarding')
+    expect(snapshot.steps).toHaveLength(5)
+    expect(snapshot.agents.every((a) => a.squadId === null)).toBe(true)
+    expect(snapshot.questions).toHaveLength(0)
+
+    vi.advanceTimersByTime(TICK * 3)
+    expect(engine.getSnapshot().steps[0].status).toBe('verified')
+
+    vi.advanceTimersByTime(TICK * 40)
+    const finished = engine.getSnapshot()
+    expect(finished.run.state).toBe('completed')
+    expect(finished.steps.every((s) => s.status === 'verified')).toBe(true)
+    engine.stop()
+  })
+
+  it('demo squad SÓ quando escolhida: cria squad 2 ativos / 2 na fila / 1 concluído', () => {
+    const { engine, events } = createEngine()
+    const snapshot = engine.startNewRun({
+      text: 'Corrigir cinco bugs',
+      mode: 'squad_demo',
+      continuedFromRunId: 'run-auth-demo'
+    })
+
+    const members = snapshot.agents.filter((a) => a.squadId === 'squad-sonnet')
+    expect(members).toHaveLength(5)
+    expect(members.filter((a) => a.state === 'executing')).toHaveLength(2)
+    expect(members.filter((a) => a.state === 'waiting')).toHaveLength(2)
+    expect(members.filter((a) => a.state === 'completed')).toHaveLength(1)
+
+    expect(events.some((e) => e.event.type === 'plan_created' && /squad/i.test(e.event.message))).toBe(true)
+    expect(
+      events.some(
+        (e) => e.event.type === 'user_direction' && e.event.message.includes('run-auth-demo')
+      )
+    ).toBe(true)
+    engine.stop()
+  })
+
+  it('squad: fila é promovida quando um executante conclui (limite simulado)', () => {
+    const { engine } = createEngine()
+    engine.startNewRun({ text: 'Corrigir cinco bugs', mode: 'squad_demo' })
+
+    vi.advanceTimersByTime(TICK * 4)
+    let members = engine.getSnapshot().agents.filter((a) => a.squadId !== null)
+    expect(members.find((a) => a.id === 'ag-sonnet-1')?.state).toBe('completed')
+    expect(members.find((a) => a.id === 'ag-sonnet-3')?.state).toBe('executing')
+    expect(members.find((a) => a.id === 'ag-sonnet-4')?.state).toBe('waiting')
+
+    vi.advanceTimersByTime(TICK * 30)
+    const finished = engine.getSnapshot()
+    expect(finished.run.state).toBe('completed')
+    members = finished.agents.filter((a) => a.squadId !== null)
+    expect(members.every((a) => a.state === 'completed')).toBe(true)
+    engine.stop()
+  })
+
   it('rejeita resposta vazia', () => {
     const { engine } = createEngine()
     engine.start()

@@ -73,7 +73,26 @@ export function DecisionBox({
   }
 
   return (
-    <Modal open onClose={onClose} title={`Caixa de Decisões — ${questions.length} pendente(s)`}>
+    <Modal
+      open
+      onClose={onClose}
+      title={`Caixa de Decisões — ${questions.length} pendente(s)`}
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[11px] text-ink-faint">
+            Rascunhos ficam salvos ao navegar entre perguntas.
+          </p>
+          <div className="flex gap-2">
+            <PixelButton variant="ghost" onClick={onClose}>
+              Depois
+            </PixelButton>
+            <PixelButton variant="warn" onClick={submit} disabled={readyInputs.length === 0}>
+              Enviar {readyInputs.length} resposta{readyInputs.length === 1 ? '' : 's'}
+            </PixelButton>
+          </div>
+        </div>
+      }
+    >
       {questions.length === 0 ? (
         <p className="text-sm text-ink-dim">Nenhuma pergunta pendente. Os agentes seguem trabalhando.</p>
       ) : (
@@ -163,19 +182,6 @@ export function DecisionBox({
         </div>
       )}
 
-      <div className="mt-5 flex items-center justify-between gap-2 border-t-2 border-night-600 pt-4">
-        <p className="text-[11px] text-ink-faint">
-          Rascunhos ficam salvos ao navegar entre perguntas.
-        </p>
-        <div className="flex gap-2">
-          <PixelButton variant="ghost" onClick={onClose}>
-            Depois
-          </PixelButton>
-          <PixelButton variant="warn" onClick={submit} disabled={readyInputs.length === 0}>
-            Enviar {readyInputs.length} resposta{readyInputs.length === 1 ? '' : 's'}
-          </PixelButton>
-        </div>
-      </div>
     </Modal>
   )
 }

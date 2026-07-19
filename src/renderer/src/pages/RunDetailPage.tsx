@@ -6,7 +6,14 @@ import {
   STEP_STATUS_LABELS
 } from '@shared/domain'
 import { useRunStore } from '@renderer/stores/run-store'
-import { AGENT_STATE_STYLE, RUN_STATE_STYLE, STEP_STATUS_STYLE, formatClock } from '@renderer/lib/state-ui'
+import { useNow } from '@renderer/lib/use-now'
+import {
+  AGENT_STATE_STYLE,
+  RUN_STATE_STYLE,
+  STEP_STATUS_STYLE,
+  formatClock,
+  formatElapsed
+} from '@renderer/lib/state-ui'
 import { PixelBadge } from '@renderer/components/ui/PixelBadge'
 import { PixelTabs } from '@renderer/components/ui/PixelTabs'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
@@ -16,6 +23,7 @@ import { StepProgress } from '@renderer/components/ui/StepProgress'
 export function RunDetailPage(): React.JSX.Element {
   const { snapshot } = useRunStore()
   const [tab, setTab] = useState('plan')
+  const now = useNow(1000)
 
   if (!snapshot) {
     return (
@@ -86,28 +94,53 @@ export function RunDetailPage(): React.JSX.Element {
             id: 'agents',
             label: 'Agentes',
             content: (
-              <ul className="space-y-2">
-                {snapshot.agents.map((agent) => {
-                  const style = AGENT_STATE_STYLE[agent.state]
-                  return (
-                    <li
-                      key={agent.id}
-                      className="pixel-frame flex items-center justify-between gap-3 px-4 py-2 [--px-border:var(--color-night-500)]"
-                    >
-                      <div className="min-w-0">
-                        <p className="font-pixel text-xs text-ink">
-                          {AGENT_ROLE_LABELS[agent.role]}
-                        </p>
-                        <p className="truncate text-[11px] text-ink-faint">{agent.subtask}</p>
-                      </div>
-                      <PixelBadge className={`${style.bg} ${style.text}`}>
-                        <StatusDot colorClass={style.dot} animClass={style.anim} />
-                        {AGENT_STATE_LABELS[agent.state]}
-                      </PixelBadge>
-                    </li>
-                  )
-                })}
-              </ul>
+              <div className="space-y-2">
+                <p className="text-[11px] text-ink-faint">
+                  Instâncias temporárias criadas para ESTE run a partir dos perfis
+                  reutilizáveis de Configurações. Concluídas permanecem no histórico.
+                </p>
+                <ul className="space-y-2">
+                  {snapshot.agents.map((agent) => {
+                    const style = AGENT_STATE_STYLE[agent.state]
+                    const profile = snapshot.profiles.find((p) => p.id === agent.profileId)
+                    return (
+                      <li
+                        key={agent.id}
+                        className="pixel-frame space-y-2 px-4 py-2 [--px-border:var(--color-night-500)]"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-pixel min-w-0 text-xs text-ink">
+                            {AGENT_ROLE_LABELS[agent.role]} · {agent.name}
+                          </p>
+                          <PixelBadge className={`${style.bg} ${style.text} max-w-full`}>
+                            <StatusDot colorClass={style.dot} animClass={style.anim} />
+                            <span className="truncate">{AGENT_STATE_LABELS[agent.state]}</span>
+                          </PixelBadge>
+                        </div>
+                        <p className="truncate text-[11px] text-ink-dim">{agent.subtask}</p>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-ink-faint">
+                          <span>
+                            modelo <span className="text-ink-dim">{profile?.model ?? '—'}</span>
+                          </span>
+                          <span>
+                            esforço <span className="text-ink-dim">{agent.effort}</span>
+                          </span>
+                          <span>
+                            tempo{' '}
+                            <span className="font-pixel text-ink-dim">
+                              {formatElapsed(agent.startedAt, now)}
+                            </span>
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">
+                            último evento:{' '}
+                            <span className="text-ink-dim">{agent.lastEventMessage}</span>
+                          </span>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
             )
           },
           {

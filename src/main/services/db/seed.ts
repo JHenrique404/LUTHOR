@@ -1,4 +1,4 @@
-import type { AgentProfile, RunSnapshot, Workspace } from '@shared/domain'
+import type { Agent, AgentProfile, PlanStep, Run, RunSnapshot, Task, Workspace } from '@shared/domain'
 
 /**
  * Dados demonstrativos da Fase 1 — TUDO AQUI É SIMULADO.
@@ -71,6 +71,157 @@ export function createSeedWorkspaces(now = Date.now()): Workspace[] {
   ]
 }
 
+export interface NewRunParts {
+  task: Task
+  run: Run
+  steps: PlanStep[]
+  agents: Agent[]
+}
+
+function orchestratorInstance(runId: string, now: number, subtask: string): Agent {
+  return {
+    id: 'ag-orchestrator',
+    runId,
+    role: 'orchestrator',
+    name: 'Orquestrador',
+    profileId: 'opus-orchestrator',
+    squadId: null,
+    state: 'executing',
+    subtask,
+    effort: 'high',
+    writeScope: 'read_only',
+    worktreeRef: null,
+    startedAt: now,
+    lastEventAt: now,
+    lastEventMessage: 'Plano criado'
+  }
+}
+
+/**
+ * "Nova tarefa" no fluxo padrão: run sequencial genérico coerente com o texto
+ * informado. Etapas verificadas uma a uma pelo motor simulado.
+ */
+export function createStandardRunParts(runId: string, title: string, now: number): NewRunParts {
+  const stepTitles = [
+    'Mapear requisitos da tarefa',
+    'Planejar implementação',
+    'Implementar mudanças principais',
+    'Cobrir com testes',
+    'Revisão final'
+  ]
+  const workerOf: Array<{ id: string; role: Agent['role']; name: string; profileId: string }> = [
+    { id: 'ag-researcher', role: 'researcher', name: 'Pesquisador', profileId: 'local-helper' },
+    { id: 'ag-backend', role: 'backend', name: 'Backend', profileId: 'sonnet-worker' },
+    { id: 'ag-backend', role: 'backend', name: 'Backend', profileId: 'sonnet-worker' },
+    { id: 'ag-frontend', role: 'frontend', name: 'Frontend', profileId: 'codex-high' },
+    { id: 'ag-verifier', role: 'verifier', name: 'Verificador', profileId: 'sonnet-worker' }
+  ]
+  const uniqueWorkers = [...new Map(workerOf.map((w) => [w.id, w])).values()]
+
+  return {
+    task: {
+      id: `task-${runId}`,
+      workspaceId: 'ws-meu-saas',
+      title,
+      prompt: title,
+      createdAt: now
+    },
+    run: { id: runId, taskId: `task-${runId}`, state: 'running', startedAt: now, updatedAt: now },
+    steps: stepTitles.map((stepTitle, i) => ({
+      id: `${runId}-step-${i + 1}`,
+      runId,
+      index: i + 1,
+      title: stepTitle,
+      status: i === 0 ? ('in_progress' as const) : ('pending' as const),
+      assignedAgentId: workerOf[i].id
+    })),
+    agents: [
+      orchestratorInstance(runId, now, `Coordenar: ${title}`),
+      ...uniqueWorkers.map((w, i) => ({
+        id: w.id,
+        runId,
+        role: w.role,
+        name: w.name,
+        profileId: w.profileId,
+        squadId: null,
+        state: i === 0 ? ('executing' as const) : ('waiting' as const),
+        subtask:
+          i === 0 ? 'Mapear requisitos da tarefa' : 'Aguardando etapa anterior',
+        effort: 'medium' as const,
+        writeScope: w.role === 'backend' || w.role === 'frontend' ? ('writer' as const) : ('read_only' as const),
+        worktreeRef:
+          w.role === 'backend' || w.role === 'frontend' ? `wt/${runId}-${w.role}` : null,
+        startedAt: now,
+        lastEventAt: now,
+        lastEventMessage: i === 0 ? 'Iniciando análise' : 'Na fila'
+      }))
+    ]
+  }
+}
+
+/**
+ * Cenário DEMO explícito de squad dinâmica ("corrigir cinco bugs").
+ * Só é usado quando o usuário escolhe esse modo no composer — a squad é
+ * decisão do orquestrador mockado respeitando SIMULATED_WORKSPACE_LIMITS
+ * (3 processos, 2 escritores), não regra do domínio.
+ */
+export function createSquadRunParts(runId: string, title: string, now: number): NewRunParts {
+  const bugs = [
+    { label: 'Sonnet #01', subtask: 'Correção de autenticação', state: 'executing' as const },
+    { label: 'Sonnet #02', subtask: 'Erro no checkout', state: 'executing' as const },
+    { label: 'Sonnet #03', subtask: 'Testes de API', state: 'waiting' as const },
+    { label: 'Sonnet #04', subtask: 'Validação de formulário', state: 'waiting' as const },
+    { label: 'Sonnet #05', subtask: 'Ajuste visual', state: 'completed' as const }
+  ]
+  return {
+    task: {
+      id: `task-${runId}`,
+      workspaceId: 'ws-meu-saas',
+      title,
+      prompt: title,
+      createdAt: now
+    },
+    run: { id: runId, taskId: `task-${runId}`, state: 'running', startedAt: now, updatedAt: now },
+    steps: bugs.map((bug, i) => ({
+      id: `${runId}-step-${i + 1}`,
+      runId,
+      index: i + 1,
+      title: bug.subtask,
+      status:
+        bug.state === 'completed'
+          ? ('verified' as const)
+          : bug.state === 'executing'
+            ? ('in_progress' as const)
+            : ('pending' as const),
+      assignedAgentId: `ag-sonnet-${i + 1}`
+    })),
+    agents: [
+      orchestratorInstance(runId, now, `Coordenar squad: ${title}`),
+      ...bugs.map((bug, i) => ({
+        id: `ag-sonnet-${i + 1}`,
+        runId,
+        role: 'worker' as const,
+        name: bug.label,
+        profileId: 'sonnet-worker',
+        squadId: 'squad-sonnet',
+        state: bug.state,
+        subtask: bug.subtask,
+        effort: 'medium' as const,
+        writeScope: 'writer' as const,
+        worktreeRef: `wt/${runId}-bug-${i + 1}`,
+        startedAt: now,
+        lastEventAt: now,
+        lastEventMessage:
+          bug.state === 'executing'
+            ? 'Trabalhando na correção'
+            : bug.state === 'waiting'
+              ? 'Na fila (limite de 3 processos)'
+              : 'Correção verificada'
+      }))
+    ]
+  }
+}
+
 export function createSeedSnapshot(now = Date.now()): RunSnapshot {
   const workspace = createSeedWorkspaces(now)[0]
   const runId = 'run-auth-demo'
@@ -141,6 +292,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         role: 'orchestrator',
         name: 'Orquestrador',
         profileId: 'opus-orchestrator',
+        squadId: null,
         state: 'executing',
         subtask: 'Coordenar o plano de autenticação e verificar etapas',
         effort: 'high',
@@ -156,6 +308,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         role: 'backend',
         name: 'Backend',
         profileId: 'sonnet-worker',
+        squadId: null,
         state: 'executing',
         subtask: 'Middleware de sessão e proteção de rotas da API',
         effort: 'medium',
@@ -171,6 +324,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         role: 'frontend',
         name: 'Frontend',
         profileId: 'codex-high',
+        squadId: null,
         state: 'waiting',
         subtask: 'Telas de login e registro',
         effort: 'high',
@@ -186,6 +340,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         role: 'researcher',
         name: 'Pesquisador',
         profileId: 'local-helper',
+        squadId: null,
         state: 'completed',
         subtask: 'Comparar estratégias de hash de senha',
         effort: 'low',
@@ -201,6 +356,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         role: 'verifier',
         name: 'Verificador',
         profileId: 'sonnet-worker',
+        squadId: null,
         state: 'verifying',
         subtask: 'Validar fluxo de sessão de ponta a ponta',
         effort: 'medium',

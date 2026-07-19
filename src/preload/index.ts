@@ -4,6 +4,7 @@ import type {
   AnswerQuestionInput,
   CreateProfileInput,
   LuthorApi,
+  NewTaskInput,
   SimEventPayload,
   UpdateProfileInput,
   UserDirectionInput
@@ -33,6 +34,7 @@ const api: LuthorApi = {
       ipcRenderer.invoke(IpcChannels.simAnswerQuestions, inputs),
     addUserDirection: (input: UserDirectionInput) =>
       ipcRenderer.invoke(IpcChannels.simUserDirection, input),
+    startNewTask: (input: NewTaskInput) => ipcRenderer.invoke(IpcChannels.simNewTask, input),
     onEvent: (cb: (payload: SimEventPayload) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: SimEventPayload): void =>
         cb(payload)

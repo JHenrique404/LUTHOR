@@ -8,6 +8,7 @@ import type {
 import type {
   AnswerQuestionInput,
   CreateProfileInput,
+  NewTaskInput,
   UpdateProfileInput,
   UserDirectionInput
 } from './schemas'
@@ -16,6 +17,7 @@ import type {
 export type {
   AnswerQuestionInput,
   CreateProfileInput,
+  NewTaskInput,
   UpdateProfileInput,
   UserDirectionInput
 } from './schemas'
@@ -36,6 +38,7 @@ export const IpcChannels = {
   simAnswerQuestion: 'luthor:sim:answer-question',
   simAnswerQuestions: 'luthor:sim:answer-questions',
   simUserDirection: 'luthor:sim:user-direction',
+  simNewTask: 'luthor:sim:new-task',
   profilesList: 'luthor:profiles:list',
   profileCreate: 'luthor:profiles:create',
   profileUpdate: 'luthor:profiles:update',
@@ -78,8 +81,10 @@ export interface LuthorApi {
     answerQuestion(input: AnswerQuestionInput): Promise<RunSnapshot>
     /** Caixa de Decisões: envia várias respostas de uma vez. */
     answerQuestions(inputs: AnswerQuestionInput[]): Promise<RunSnapshot>
-    /** Composer: registra nova tarefa/instrução como evento simulado. */
+    /** Composer: registra instrução como evento simulado no run atual. */
     addUserDirection(input: UserDirectionInput): Promise<RunSnapshot>
+    /** "Nova tarefa": cria um novo run simulado (substitui o run ativo na Fase 1). */
+    startNewTask(input: NewTaskInput): Promise<RunSnapshot>
     onEvent(cb: (payload: SimEventPayload) => void): () => void
   }
   profiles: {

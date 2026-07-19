@@ -4,10 +4,12 @@ import userEvent from '@testing-library/user-event'
 import type { Question, RunSnapshot } from '@shared/domain'
 import { StepProgress } from '@renderer/components/ui/StepProgress'
 import { AgentCard } from '@renderer/components/office/AgentCard'
+import { ComposerModal } from '@renderer/components/office/ComposerModal'
 import { DecisionBox } from '@renderer/components/office/DecisionBox'
+import { SquadCard } from '@renderer/components/office/SquadCard'
 import { AgentOfficePage } from '@renderer/pages/AgentOfficePage'
 import { useRunStore } from '@renderer/stores/run-store'
-import { createSeedSnapshot } from '../src/main/services/db/seed'
+import { createSeedSnapshot, createSquadRunParts } from '../src/main/services/db/seed'
 
 const snapshot = createSeedSnapshot()
 
@@ -159,6 +161,62 @@ describe('DecisionBox', () => {
   })
 })
 
+describe('ComposerModal — Direcionar run', () => {
+  it('exclui instâncias concluídas dos destinatários', async () => {
+    // Seed: Pesquisador está completed — deve ficar fora da lista.
+    render(
+      <ComposerModal
+        kind="instruction"
+        agents={snapshot.agents}
+        onClose={() => {}}
+        onSubmitNewTask={vi.fn()}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByLabelText('Agente específico'))
+    const select = screen.getByRole('combobox')
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.textContent ?? '')
+    expect(options.some((o) => o.includes('Backend'))).toBe(true)
+    expect(options.some((o) => o.includes('Pesquisador'))).toBe(false)
+  })
+})
+
+describe('SquadCard', () => {
+  const members = createSquadRunParts('run-squad-t', 'Corrigir cinco bugs', Date.now()).agents.filter(
+    (a) => a.squadId !== null
+  )
+
+  it('mostra resumo agregado e expande para as instâncias', async () => {
+    const onSelect = vi.fn()
+    render(<SquadCard members={members} now={Date.now()} onSelect={onSelect} />)
+    expect(screen.getByText(/2 ativos · 2 na fila · 1 concluído/)).toBeInTheDocument()
+    expect(screen.getByText(/3 processos/)).toBeInTheDocument()
+    expect(screen.queryByText('Sonnet #03')).not.toBeInTheDocument()
+
+    const toggle = screen.getByRole('button', { name: /squad sonnet/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Sonnet #03')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /detalhes de Sonnet #03/i }))
+    expect(onSelect).toHaveBeenCalledWith('ag-sonnet-3')
+  })
+})
+
+describe('Modal — responsividade', () => {
+  it('botões de envio ficam FORA da área rolável (nunca cortados)', () => {
+    const q = makeQuestion('q-x', 'ag-verifier', 'Pergunta longa?')
+    render(
+      <DecisionBox questions={[q]} agents={snapshot.agents} onClose={() => {}} onSubmit={vi.fn()} />
+    )
+    const scrollArea = screen.getByTestId('modal-scroll-area')
+    const submit = screen.getByRole('button', { name: /enviar 0 resposta/i })
+    expect(submit).toBeInTheDocument()
+    expect(scrollArea.contains(submit)).toBe(false)
+  })
+})
+
 describe('AgentOfficePage — estados do run', () => {
   afterEach(() => {
     useRunStore.setState({ snapshot: null, lastEvent: null })
@@ -170,21 +228,27 @@ describe('AgentOfficePage — estados do run', () => {
     return snap
   }
 
-  it('run ativo mostra "Pausar tudo" e o composer', () => {
+  it('run ativo mostra "Pausar tudo", "Nova tarefa" e "Direcionar run"', () => {
     useRunStore.setState({ snapshot: withRunState('running') })
     render(<AgentOfficePage />)
     expect(screen.getByRole('button', { name: 'Pausar tudo' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Nova tarefa' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Direcionar run' })).toBeInTheDocument()
   })
 
   it.each(['completed', 'failed', 'cancelled'] as const)(
-    'run %s esconde "Pausar tudo" e mostra selo de estado final',
+    'run %s: sem "Pausar tudo"/"Direcionar run", mas "Nova tarefa" e continuação presentes',
     (state) => {
       useRunStore.setState({ snapshot: withRunState(state) })
       render(<AgentOfficePage />)
       expect(screen.queryByRole('button', { name: 'Pausar tudo' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Nova tarefa' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Direcionar run' })).not.toBeInTheDocument()
+      // "Nova tarefa" é persistente: caminho permanente para o orquestrador.
+      expect(screen.getByRole('button', { name: 'Nova tarefa' })).toBeInTheDocument()
       expect(screen.getByTitle('Estado final do run')).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: 'Continuar a partir deste run' })
+      ).toBeInTheDocument()
     }
   )
 })

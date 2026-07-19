@@ -15,7 +15,8 @@ const ROLE_ACCENT: Record<AgentRole, string> = {
   backend: '#37e6a0',
   frontend: '#45d8e8',
   researcher: '#f6c245',
-  verifier: '#6ea8fe'
+  verifier: '#6ea8fe',
+  worker: '#8ae67e'
 }
 
 /* Cada papel tem silhueta própria (coroa, chave, pincel, lupa, escudo). */
@@ -89,6 +90,20 @@ const ROLE_MAP: Record<AgentRole, string[]> = {
     '...aaaaaa...',
     '....aaaa....',
     '.....aa.....'
+  ],
+  worker: [
+    '............',
+    '..d.aaaa.d..',
+    '..daaaaaad..',
+    '..aweaawea..',
+    '..aaaaaaaa..',
+    '...aaaaaa...',
+    '..aaddddaa..',
+    '.a.aaaaaa.a.',
+    '.a.adddda.a.',
+    '...aa..aa...',
+    '..dd....dd..',
+    '............'
   ]
 }
 

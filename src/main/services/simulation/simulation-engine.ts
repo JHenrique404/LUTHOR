@@ -10,9 +10,11 @@ import type {
 import { assertTransition } from '@shared/state-machine/run-state'
 import type {
   AnswerQuestionInput,
+  NewTaskInput,
   SimEventPayload,
   UserDirectionInput
 } from '@shared/ipc/contract'
+import { createSquadRunParts, createStandardRunParts } from '../db/seed'
 
 export interface SimulationEngineOptions {
   snapshot: RunSnapshot
@@ -21,7 +23,19 @@ export interface SimulationEngineOptions {
   tickMs?: number
 }
 
-type Phase = 'working' | 'awaiting_answer' | 'verify_step4' | 'frontend' | 'final_verify' | 'done'
+type Phase =
+  | 'working'
+  | 'awaiting_answer'
+  | 'verify_step4'
+  | 'frontend'
+  | 'final_verify'
+  /** Fluxo padrão de "Nova tarefa": etapas sequenciais genéricas. */
+  | 'std_working'
+  /** Demo explícita de squad dinâmica (fila + limite simulado de processos). */
+  | 'squad_working'
+  /** Fecho genérico: verifying -> completed. */
+  | 'finalizing'
+  | 'done'
 
 const ACTIVE_AGENT_STATES: AgentState[] = ['planning', 'waiting', 'executing', 'verifying']
 
@@ -72,6 +86,8 @@ export class SimulationEngine {
   private eventSeq = 0
   private pausedAll = false
   private resumeRunState: RunState = 'running'
+  /** Sequência para ids de runs criados por "Nova tarefa". */
+  private runSeq = 0
   /** A verificação da etapa 4 só destrava depois da resposta do Verificador. */
   private verifierAnswered = false
   /** O Backend consolida uma segunda dúvida se o usuário demorar a responder. */
@@ -193,6 +209,59 @@ export class SimulationEngine {
     this.snapshot.profiles = structuredClone(profiles)
   }
 
+  /**
+   * "Nova tarefa": cria um NOVO run simulado no workspace ativo — não é
+   * mensagem no run anterior. Fase 1 mantém um run por vez, então o snapshot
+   * anterior é substituído (histórico multi-run vem em fase futura).
+   */
+  startNewRun(input: NewTaskInput): RunSnapshot {
+    this.stop()
+    const now = Date.now()
+    const title = input.text.trim()
+    this.runSeq++
+    const runId = `run-${input.mode === 'squad_demo' ? 'squad' : 'task'}-${this.runSeq}`
+    const parts =
+      input.mode === 'squad_demo'
+        ? createSquadRunParts(runId, title, now)
+        : createStandardRunParts(runId, title, now)
+
+    this.snapshot = {
+      workspace: this.snapshot.workspace,
+      profiles: this.snapshot.profiles,
+      ...structuredClone(parts),
+      questions: [],
+      checkpoints: [],
+      events: []
+    }
+    this.phase = input.mode === 'squad_demo' ? 'squad_working' : 'std_working'
+    this.phaseTicks = 0
+    this.logCursor = 0
+    this.pausedAll = false
+    this.resumeRunState = 'running'
+    this.pausedByAll.clear()
+    this.pausedIndividually.clear()
+    this.verifierAnswered = false
+    this.backendQuestionOpened = false
+
+    this.pushEvent('task_received', null, `Nova tarefa recebida: ${title}`)
+    if (input.continuedFromRunId) {
+      this.pushEvent(
+        'user_direction',
+        'ag-orchestrator',
+        `Continuação do run ${input.continuedFromRunId}: resumo anexado como contexto (simulado)`
+      )
+    }
+    this.pushEvent(
+      'plan_created',
+      'ag-orchestrator',
+      input.mode === 'squad_demo'
+        ? 'Orquestrador criou squad Sonnet com 5 correções (limites simulados: 3 processos, 2 escritores)'
+        : 'Orquestrador criou plano com 5 etapas'
+    )
+    this.start()
+    return this.getSnapshot()
+  }
+
   private applyAnswer(input: AnswerQuestionInput): boolean {
     const question = this.snapshot.questions.find((q) => q.id === input.questionId)
     if (!question || question.status !== 'pending') return false
@@ -292,9 +361,130 @@ export class SimulationEngine {
         if (this.phaseTicks >= 2) this.completeRun()
         break
       }
+      case 'std_working': {
+        this.phaseTicks++
+        this.tickStandardRun()
+        break
+      }
+      case 'squad_working': {
+        this.phaseTicks++
+        this.tickSquadRun()
+        break
+      }
+      case 'finalizing': {
+        this.phaseTicks++
+        if (this.phaseTicks >= 2) this.finishRunGeneric()
+        break
+      }
       case 'done':
         break
     }
+  }
+
+  /** Fluxo padrão: verifica etapas em sequência, cada uma pelo agente designado. */
+  private tickStandardRun(): void {
+    const step = [...this.snapshot.steps]
+      .sort((a, b) => a.index - b.index)
+      .find((s) => s.status !== 'verified')
+    if (!step) {
+      this.enterFinalVerification()
+      return
+    }
+    const agent = step.assignedAgentId ? this.findAgent(step.assignedAgentId) : undefined
+    if (!agent || agent.state === 'paused') return
+
+    if (agent.state === 'waiting') {
+      agent.state = 'executing'
+      agent.subtask = step.title
+      agent.startedAt = Date.now()
+      step.status = 'in_progress'
+      this.pushEvent('agent_started', agent.id, `${agent.name} iniciou etapa ${step.index}: ${step.title}`)
+      return
+    }
+    if (this.phaseTicks % 3 !== 0) {
+      this.pushEvent('agent_log', agent.id, `Trabalhando em: ${step.title}…`)
+      return
+    }
+    step.status = 'verified'
+    this.pushEvent('step_verified', agent.id, `Etapa ${step.index} verificada: ${step.title}`)
+    const remaining = this.snapshot.steps.some(
+      (s) => s.assignedAgentId === agent.id && s.status !== 'verified'
+    )
+    if (!remaining) {
+      agent.state = 'completed'
+      this.pushEvent('agent_completed', agent.id, `${agent.name} concluiu suas etapas`)
+    }
+  }
+
+  /**
+   * Demo de squad: fila simulada respeitando SIMULATED_WORKSPACE_LIMITS —
+   * a cada ciclo um executante conclui e o primeiro da fila é promovido.
+   */
+  private tickSquadRun(): void {
+    const members = this.snapshot.agents.filter((a) => a.squadId !== null)
+    const executing = members.filter((a) => a.state === 'executing')
+    const queued = members.filter((a) => a.state === 'waiting')
+
+    if (executing.length === 0 && queued.length === 0) {
+      this.enterFinalVerification()
+      return
+    }
+    if (this.phaseTicks % 4 === 0 && executing.length > 0) {
+      const done = executing[0]
+      done.state = 'completed'
+      const step = this.snapshot.steps.find((s) => s.assignedAgentId === done.id)
+      if (step) step.status = 'verified'
+      this.pushEvent('step_verified', done.id, `Correção verificada: ${done.subtask}`)
+      this.pushEvent('agent_completed', done.id, `${done.name} concluiu a correção`)
+
+      const next = queued[0]
+      if (next) {
+        next.state = 'executing'
+        next.startedAt = Date.now()
+        const nextStep = this.snapshot.steps.find((s) => s.assignedAgentId === next.id)
+        if (nextStep) nextStep.status = 'in_progress'
+        this.pushEvent(
+          'agent_started',
+          next.id,
+          `${next.name} saiu da fila (vaga no limite de 3 processos)`
+        )
+      }
+      return
+    }
+    if (executing.length > 0) {
+      const agent = executing[this.logCursor % executing.length]
+      this.logCursor++
+      this.pushEvent('agent_log', agent.id, `Corrigindo: ${agent.subtask}…`)
+    }
+  }
+
+  private enterFinalVerification(): void {
+    const { run } = this.snapshot
+    if (run.state === 'running') {
+      run.state = assertTransition(run.state, 'verifying')
+      this.pushEvent('run_state_changed', null, 'Todas as etapas verificadas — fechamento do run')
+    }
+    this.phase = 'finalizing'
+    this.phaseTicks = 0
+  }
+
+  private finishRunGeneric(): void {
+    const { run } = this.snapshot
+    run.state = assertTransition(run.state, 'completed')
+    for (const agent of this.snapshot.agents) {
+      if (ACTIVE_AGENT_STATES.includes(agent.state)) agent.state = 'completed'
+    }
+    const { verified, total } = {
+      verified: this.snapshot.steps.filter((s) => s.status === 'verified').length,
+      total: this.snapshot.steps.length
+    }
+    this.pushEvent(
+      'run_completed',
+      null,
+      `Run concluído: ${this.snapshot.task.title} (${verified} de ${total} etapas verificadas)`
+    )
+    this.phase = 'done'
+    this.stop()
   }
 
   private openSessionQuestion(): void {
