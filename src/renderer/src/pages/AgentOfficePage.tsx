@@ -1,19 +1,30 @@
 import { useState } from 'react'
-import { RUN_STATE_LABELS } from '@shared/domain'
+import type { Agent } from '@shared/domain'
+import { RUN_STATE_LABELS, verifiedProgress } from '@shared/domain'
 import { isTerminal } from '@shared/state-machine/run-state'
-import type { UserDirectionInput } from '@shared/ipc/contract'
 import { useRunStore } from '@renderer/stores/run-store'
 import { useNow } from '@renderer/lib/use-now'
 import { RUN_STATE_STYLE } from '@renderer/lib/state-ui'
 import { PixelBadge } from '@renderer/components/ui/PixelBadge'
 import { PixelButton } from '@renderer/components/ui/PixelButton'
+import { PixelPanel } from '@renderer/components/ui/PixelPanel'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
 import { OrchestratorDesk } from '@renderer/components/office/OrchestratorDesk'
 import { AgentCard } from '@renderer/components/office/AgentCard'
+import { SquadCard } from '@renderer/components/office/SquadCard'
 import { AgentDrawer } from '@renderer/components/office/AgentDrawer'
 import { DecisionBox } from '@renderer/components/office/DecisionBox'
 import { ComposerModal } from '@renderer/components/office/ComposerModal'
+import type { ComposerKind } from '@renderer/components/office/ComposerModal'
 import { EventTicker } from '@renderer/components/office/EventTicker'
+
+interface ComposerState {
+  kind: ComposerKind
+  continuedFromRunId?: string
+}
+
+/** Estados em que o run aceita "Direcionar run". */
+const DIRECTABLE_RUN_STATES = ['running', 'awaiting_user', 'paused']
 
 /** Agent Office: painel principal vivo com o run demo simulado. */
 export function AgentOfficePage(): React.JSX.Element {
@@ -25,13 +36,14 @@ export function AgentOfficePage(): React.JSX.Element {
     pauseAgent,
     resumeAgent,
     answerQuestions,
-    addUserDirection
+    addUserDirection,
+    startNewTask
   } = useRunStore()
   const now = useNow(1000)
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [decisionBoxOpen, setDecisionBoxOpen] = useState(false)
   const [decisionInitialId, setDecisionInitialId] = useState<string | null>(null)
-  const [composerKind, setComposerKind] = useState<UserDirectionInput['kind'] | null>(null)
+  const [composer, setComposer] = useState<ComposerState | null>(null)
 
   if (!snapshot) {
     return (
@@ -43,10 +55,19 @@ export function AgentOfficePage(): React.JSX.Element {
 
   const orchestrator = snapshot.agents.find((a) => a.role === 'orchestrator')
   const workers = snapshot.agents.filter((a) => a.role !== 'orchestrator')
+  const soloWorkers = workers.filter((a) => a.squadId === null)
+  const squads = new Map<string, Agent[]>()
+  for (const worker of workers) {
+    if (!worker.squadId) continue
+    squads.set(worker.squadId, [...(squads.get(worker.squadId) ?? []), worker])
+  }
+
   const paused = snapshot.run.state === 'paused'
   const terminal = isTerminal(snapshot.run.state)
+  const directable = DIRECTABLE_RUN_STATES.includes(snapshot.run.state)
   const runStyle = RUN_STATE_STYLE[snapshot.run.state]
   const pendingQuestions = snapshot.questions.filter((q) => q.status === 'pending')
+  const progress = verifiedProgress(snapshot.steps)
 
   const openDecisionBox = (questionId?: string): void => {
     setDecisionInitialId(questionId ?? null)
@@ -74,21 +95,23 @@ export function AgentOfficePage(): React.JSX.Element {
           >
             Decisões ({pendingQuestions.length})
           </PixelButton>
+          {/* "Nova tarefa" é o caminho permanente para falar com o orquestrador —
+              disponível mesmo com run terminado. */}
+          <PixelButton variant="orch" onClick={() => setComposer({ kind: 'new_task' })}>
+            Nova tarefa
+          </PixelButton>
+          {directable && (
+            <PixelButton variant="orch" onClick={() => setComposer({ kind: 'instruction' })}>
+              Direcionar run
+            </PixelButton>
+          )}
           {!terminal && (
-            <>
-              <PixelButton variant="orch" onClick={() => setComposerKind('new_task')}>
-                Nova tarefa
-              </PixelButton>
-              <PixelButton variant="orch" onClick={() => setComposerKind('instruction')}>
-                + Instrução
-              </PixelButton>
-              <PixelButton
-                variant={paused ? 'primary' : 'danger'}
-                onClick={() => void (paused ? resumeAll() : pauseAll())}
-              >
-                {paused ? 'Retomar' : 'Pausar tudo'}
-              </PixelButton>
-            </>
+            <PixelButton
+              variant={paused ? 'primary' : 'danger'}
+              onClick={() => void (paused ? resumeAll() : pauseAll())}
+            >
+              {paused ? 'Retomar' : 'Pausar tudo'}
+            </PixelButton>
           )}
           {terminal && (
             <PixelBadge
@@ -102,6 +125,31 @@ export function AgentOfficePage(): React.JSX.Element {
         </div>
       </header>
 
+      {terminal && (
+        <PixelPanel
+          title="Resumo do run"
+          titleAccent="var(--color-cyan-glow)"
+          frameColor="var(--color-night-500)"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-ink-dim">
+              <span className="text-ink">{snapshot.task.title}</span> —{' '}
+              {RUN_STATE_LABELS[snapshot.run.state].toLowerCase()} com {progress.verified} de{' '}
+              {progress.total} etapas verificadas. As instâncias de agentes permanecem no
+              histórico deste run.
+            </p>
+            <PixelButton
+              variant="orch"
+              onClick={() =>
+                setComposer({ kind: 'new_task', continuedFromRunId: snapshot.run.id })
+              }
+            >
+              Continuar a partir deste run
+            </PixelButton>
+          </div>
+        </PixelPanel>
+      )}
+
       {orchestrator && (
         <OrchestratorDesk
           orchestrator={orchestrator}
@@ -114,7 +162,17 @@ export function AgentOfficePage(): React.JSX.Element {
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-4">
-        {workers.map((agent) => (
+        {[...squads.entries()].map(([squadId, members]) => (
+          <SquadCard
+            key={squadId}
+            members={members}
+            profile={snapshot.profiles.find((p) => p.id === members[0]?.profileId)}
+            lastEvent={lastEvent}
+            now={now}
+            onSelect={setSelectedAgentId}
+          />
+        ))}
+        {soloWorkers.map((agent) => (
           <AgentCard
             key={agent.id}
             agent={agent}
@@ -150,12 +208,14 @@ export function AgentOfficePage(): React.JSX.Element {
         />
       )}
 
-      {composerKind && (
+      {composer && (
         <ComposerModal
-          kind={composerKind}
+          kind={composer.kind}
           agents={snapshot.agents}
-          onClose={() => setComposerKind(null)}
-          onSubmit={(input) => void addUserDirection(input)}
+          continuedFromRunId={composer.continuedFromRunId}
+          onClose={() => setComposer(null)}
+          onSubmitNewTask={(input) => void startNewTask(input)}
+          onSubmitInstruction={(input) => void addUserDirection(input)}
         />
       )}
     </div>

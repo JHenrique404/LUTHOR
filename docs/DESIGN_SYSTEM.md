@@ -169,10 +169,19 @@ Tabs acessíveis; ativa: fundo `night-700`, texto ciano, régua inferior
 ### Modal / Drawer
 Overlay `bg-black/50–60`; painel com moldura pixel (Modal: âmbar por padrão —
 decisões; Drawer: neutro). Fecham por Esc e clique no backdrop.
+Modal é flex-column com `max-h-[85vh]`: cabeçalho e `footer` (prop) ficam fixos,
+apenas o miolo rola (`min-h-0 flex-1 overflow-y-auto`) — em viewport baixa nenhum
+botão de ação pode sair da janela.
 
 ### DecisionBox
 Modal de duas colunas: lista lateral de perguntas pendentes (com indicador de
 rascunho) + detalhe com opções e resposta livre. Rodapé com "Enviar N respostas".
+
+### SquadCard
+Card agregado (verde, ocupa a linha inteira) para squads dinâmicas: resumo
+`Squad Sonnet · N ativos · N na fila · N concluídos` + linha de limites simulados;
+expansível (`aria-expanded`) para as instâncias individuais, cada uma clicável
+para o drawer. Evita poluir a grade com muitos cards soltos.
 
 ### AgentAvatar
 Pixel art original 12×12 desenhada como `<rect>`s SVG inline

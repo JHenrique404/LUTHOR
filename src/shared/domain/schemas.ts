@@ -35,7 +35,9 @@ export const AgentRoleSchema = z.enum([
   'frontend',
   'backend',
   'researcher',
-  'verifier'
+  'verifier',
+  /** Membro genérico de squad dinâmica criada pelo orquestrador. */
+  'worker'
 ])
 export type AgentRole = z.infer<typeof AgentRoleSchema>
 
@@ -104,12 +106,20 @@ export const AgentProfileSchema = z.object({
 })
 export type AgentProfile = z.infer<typeof AgentProfileSchema>
 
+/**
+ * INSTÂNCIA de agente: trabalhador temporário criado para um run específico.
+ * Não confundir com AgentProfile (configuração reutilizável em Configurações):
+ * o orquestrador cria instâncias a partir de um perfil quando o run precisa.
+ */
 export const AgentSchema = z.object({
   id: z.string(),
   runId: z.string(),
   role: AgentRoleSchema,
   name: z.string().min(1),
+  /** Perfil reutilizável que originou esta instância. */
   profileId: z.string(),
+  /** Instâncias criadas em grupo pelo orquestrador compartilham squadId. */
+  squadId: z.string().nullable(),
   state: AgentStateSchema,
   subtask: z.string(),
   effort: EffortSchema,
@@ -195,6 +205,16 @@ export const RunSnapshotSchema = z.object({
   profiles: z.array(AgentProfileSchema)
 })
 export type RunSnapshot = z.infer<typeof RunSnapshotSchema>
+
+/**
+ * Limites de concorrência do workspace — SIMULADOS na Fase 1.
+ * Nenhum processo real existe; o valor só informa a decisão do orquestrador
+ * mockado (fila da squad) e a UI. A Fase 2 aplica isso a processos reais.
+ */
+export const SIMULATED_WORKSPACE_LIMITS = {
+  maxProcesses: 3,
+  maxWriters: 2
+} as const
 
 /** Progresso derivado — nunca porcentagem inventada. */
 export function verifiedProgress(steps: PlanStep[]): { verified: number; total: number } {

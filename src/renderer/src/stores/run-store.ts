@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { RunEvent, RunSnapshot } from '@shared/domain'
-import type { AnswerQuestionInput, UserDirectionInput } from '@shared/ipc/contract'
+import type { AnswerQuestionInput, NewTaskInput, UserDirectionInput } from '@shared/ipc/contract'
 
 interface RunStoreState {
   snapshot: RunSnapshot | null
@@ -17,6 +17,7 @@ interface RunStoreState {
   answerQuestion: (input: AnswerQuestionInput) => Promise<void>
   answerQuestions: (inputs: AnswerQuestionInput[]) => Promise<void>
   addUserDirection: (input: UserDirectionInput) => Promise<void>
+  startNewTask: (input: NewTaskInput) => Promise<void>
 }
 
 let unsubscribe: (() => void) | null = null
@@ -29,7 +30,16 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
 
   init: async () => {
     const api = window.luthor
-    if (!api || get().initialized) return
+    if (!api) {
+      // Preview no navegador comum (sem Electron), apenas em dev: snapshot
+      // estático para inspecionar a UI. Tree-shaken do build de produção.
+      if (import.meta.env.DEV && !get().snapshot) {
+        const { createBrowserPreviewSnapshot } = await import('@renderer/lib/browser-preview')
+        set({ snapshot: createBrowserPreviewSnapshot(), initialized: true })
+      }
+      return
+    }
+    if (get().initialized) return
     set({ initialized: true })
     unsubscribe?.()
     unsubscribe = api.sim.onEvent(({ event, snapshot }) => {
@@ -79,5 +89,11 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
     const api = window.luthor
     if (!api) return
     set({ snapshot: await api.sim.addUserDirection(input) })
+  },
+
+  startNewTask: async (input) => {
+    const api = window.luthor
+    if (!api) return
+    set({ snapshot: await api.sim.startNewTask(input) })
   }
 }))

@@ -121,11 +121,21 @@ preload e re-renderiza a partir do snapshot completo. Comandos do usuário
   um só lugar — contador no topo, lista lateral para navegar entre perguntas, rascunhos
   preservados e envio em lote ("Enviar N respostas"). Agentes consolidam dúvidas em vez
   de pausar sozinhos.
-- **Composer do orquestrador**: "Nova tarefa" e "+ Instrução" registram um evento
-  `user_direction` no feed (escopo: Orquestrador, todos os agentes ou um agente
-  específico). Fase 1: apenas evento simulado; Fase 2: vira contexto real.
-- **Estados terminais**: em `completed`/`failed`/`cancelled`, "Pausar tudo" some e um
-  selo de estado final aparece no lugar.
+- **Composer persistente**: "Nova tarefa" está sempre disponível (inclusive com run
+  terminado) e cria um **novo run simulado** no workspace ativo — com escolha de modo:
+  fluxo padrão sequencial ou a demo explícita "corrigir cinco bugs" com squad dinâmica.
+  "Direcionar run" só aparece com run ativo e registra `user_direction` no run atual
+  (escopo: Orquestrador, todos ou uma instância ativa — concluídas ficam no histórico).
+- **Estados terminais**: em `completed`/`failed`/`cancelled`, "Pausar tudo" e
+  "Direcionar run" somem; ficam o selo de estado final, "Nova tarefa" e o painel de
+  resumo com **"Continuar a partir deste run"** (vínculo conceitual mockado — sem
+  memória real na Fase 1).
+- **Squad dinâmica (demo)**: o orquestrador mockado cria instâncias `sonnet-worker`
+  em grupo, com fila respeitando limites SIMULADOS (3 processos, 2 escritores por
+  workspace — nenhum processo real). Na Agent Office a squad aparece como card
+  agregado expansível (`Squad Sonnet · 2 ativos · 2 na fila · 1 concluído`).
+- **Perfis × instâncias**: perfis (Configurações) são configurações reutilizáveis;
+  instâncias de agentes são trabalhadores temporários de um run específico.
 - **Configurações**: criar, duplicar, remover e ativar/desativar perfis mockados —
   tudo em memória, descartado ao fechar o app (aviso visível na tela).
 
@@ -137,6 +147,15 @@ dependência, Pesquisador (`local-helper`) concluído. Após alguns segundos o
 Verificador abre uma **pergunta pendente** (expiração de sessão); responder
 destrava a verificação da etapa 4 e o Frontend, até o run completar.
 **Pausar tudo** congela o timer de eventos de verdade; **Retomar** continua.
+
+## Roadmap — bandeja do sistema (não implementado)
+
+Quando existirem agentes reais em segundo plano (Fase 2+), o comportamento desejado:
+
+- Clicar no X com trabalho ativo **minimiza para a bandeja** em vez de encerrar.
+- Menu da bandeja: **Abrir LUTHOR**, **Pausar tudo**, **Retomar** e **Sair completamente**.
+- A preferência será configurável nas Configurações.
+- O encerramento real sempre deve estar disponível.
 
 ## Direção visual
 

@@ -6,6 +6,7 @@ import {
   AnswerQuestionInputSchema,
   AnswerQuestionsBatchSchema,
   CreateProfileInputSchema,
+  NewTaskInputSchema,
   ProfileIdSchema,
   UpdateProfileInputSchema,
   UserDirectionInputSchema
@@ -69,6 +70,9 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(IpcChannels.simUserDirection, (_e, input: unknown) =>
     engine.addUserDirection(parseIpc(UserDirectionInputSchema, input, IpcChannels.simUserDirection))
+  )
+  ipcMain.handle(IpcChannels.simNewTask, (_e, input: unknown) =>
+    engine.startNewRun(parseIpc(NewTaskInputSchema, input, IpcChannels.simNewTask))
   )
 
   // Mutações de perfil também sincronizam a cópia do engine, para a

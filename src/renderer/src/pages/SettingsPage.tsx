@@ -94,7 +94,11 @@ export function SettingsPage(): React.JSX.Element {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-pixel text-cyan-glow text-lg tracking-widest">CONFIGURAÇÕES</h1>
-          <p className="mt-1 text-sm text-ink-dim">Perfis de execução dos agentes.</p>
+          <p className="mt-1 text-sm text-ink-dim">
+            Perfis de execução <strong>reutilizáveis</strong>. As instâncias de agentes que
+            aparecem num run são trabalhadores temporários criados pelo orquestrador a partir
+            destes perfis.
+          </p>
         </div>
         <PixelButton variant="primary" onClick={() => void create()}>
           Adicionar perfil

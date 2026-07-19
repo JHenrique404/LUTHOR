@@ -36,6 +36,21 @@ export const UserDirectionInputSchema = z
   })
 export type UserDirectionInput = z.infer<typeof UserDirectionInputSchema>
 
+/**
+ * "Nova tarefa": cria um NOVO run simulado no workspace ativo.
+ * mode 'standard' = fluxo padrão sequencial; 'squad_demo' = cenário
+ * demonstrável de squad dinâmica (só quando escolhido explicitamente).
+ */
+export const NewTaskInputSchema = z
+  .object({
+    text: z.string().min(3).max(2000),
+    mode: z.enum(['standard', 'squad_demo']),
+    /** "Continuar a partir deste run": vínculo conceitual mockado com o run anterior. */
+    continuedFromRunId: z.string().min(1).max(128).optional()
+  })
+  .strict()
+export type NewTaskInput = z.infer<typeof NewTaskInputSchema>
+
 const ProfileFieldsSchema = z.object({
   name: z.string().min(1).max(60),
   provider: ProviderKindSchema,

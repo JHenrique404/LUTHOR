@@ -28,7 +28,8 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   frontend: 'Frontend',
   backend: 'Backend',
   researcher: 'Pesquisador',
-  verifier: 'Verificador'
+  verifier: 'Verificador',
+  worker: 'Worker'
 }
 
 export const STEP_STATUS_LABELS: Record<StepStatus, string> = {
