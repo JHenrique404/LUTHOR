@@ -1,0 +1,195 @@
+@import '@fontsource/silkscreen';
+@import '@fontsource-variable/inter';
+@import '@fontsource/jetbrains-mono';
+@import 'tailwindcss';
+
+@theme {
+  /* Paleta LUTHOR — azul-noite/grafite + acentos funcionais */
+  --color-night-950: #070b16;
+  --color-night-900: #0b1020;
+  --color-night-800: #111731;
+  --color-night-700: #1a2140;
+  --color-night-600: #252d52;
+  --color-night-500: #333c66;
+
+  --color-ink: #e8ecf8;
+  --color-ink-dim: #9aa3c2;
+  --color-ink-faint: #626b8c;
+
+  /* execução saudável */
+  --color-exec: #37e6a0;
+  --color-exec-soft: #123528;
+  --color-cyan-glow: #45d8e8;
+
+  /* orquestração */
+  --color-orch: #a583ff;
+  --color-orch-soft: #251d45;
+
+  /* atenção */
+  --color-warn: #f6c245;
+  --color-warn-soft: #3a2e10;
+
+  /* bloqueio / pausa / erro */
+  --color-alert: #ff6f68;
+  --color-alert-soft: #3c1622;
+
+  --font-pixel: 'Silkscreen', monospace;
+  --font-body: 'Inter Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+html,
+body {
+  background: var(--color-night-900);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  height: 100%;
+  /* Scroll acontece dentro do <main>; a janela nunca rola inteira. */
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
+}
+
+/* Seleção e scrollbar combinando com o tema */
+::selection {
+  background: var(--color-orch);
+  color: var(--color-night-950);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-night-900);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-night-600);
+  border: 2px solid var(--color-night-900);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-night-500);
+}
+
+/*
+ * Borda pixel: cantos "recortados" com box-shadow em degraus.
+ * Usa --px-border como cor da moldura.
+ */
+.pixel-frame {
+  --px-border: var(--color-night-500);
+  position: relative;
+  background: var(--color-night-800);
+  box-shadow:
+    0 -3px 0 0 var(--px-border),
+    0 3px 0 0 var(--px-border),
+    -3px 0 0 0 var(--px-border),
+    3px 0 0 0 var(--px-border);
+  margin: 3px;
+}
+
+.pixel-frame-inset {
+  box-shadow:
+    inset 0 3px 0 0 var(--color-night-950),
+    inset 0 -3px 0 0 var(--color-night-950);
+}
+
+.font-pixel {
+  font-family: var(--font-pixel);
+  letter-spacing: 0.02em;
+}
+
+.font-logs {
+  font-family: var(--font-mono);
+}
+
+/* Foco visível estilo retrô, consistente em toda a UI */
+:focus-visible {
+  outline: 2px dashed var(--color-cyan-glow);
+  outline-offset: 2px;
+}
+
+/* Scanlines sutis no fundo da Agent Office */
+.scanlines::before {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgb(0 0 0 / 0.09) 3px,
+    rgb(0 0 0 / 0.09) 4px
+  );
+}
+
+/*
+ * Animações pequenas ligadas a eventos reais.
+ * Definidas apenas quando o usuário NÃO pede redução de movimento.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes px-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @keyframes px-blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.15;
+    }
+  }
+  @keyframes px-slide-in {
+    from {
+      transform: translateY(6px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  @keyframes px-flash {
+    0% {
+      box-shadow:
+        0 -3px 0 0 var(--color-exec),
+        0 3px 0 0 var(--color-exec),
+        -3px 0 0 0 var(--color-exec),
+        3px 0 0 0 var(--color-exec);
+    }
+  }
+  @keyframes px-drawer-in {
+    from {
+      transform: translateX(24px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  .anim-pulse {
+    animation: px-pulse 1.6s steps(2, end) infinite;
+  }
+  .anim-blink {
+    animation: px-blink 1s steps(2, end) infinite;
+  }
+  .anim-slide-in {
+    animation: px-slide-in 0.25s steps(4, end);
+  }
+  .anim-flash {
+    animation: px-flash 0.9s steps(3, end);
+  }
+  .anim-drawer-in {
+    animation: px-drawer-in 0.2s steps(4, end);
+  }
+}

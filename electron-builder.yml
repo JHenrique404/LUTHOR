@@ -1,0 +1,11 @@
+appId: dev.luthor.app
+productName: LUTHOR
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+win:
+  target:
+    - dir
+npmRebuild: false

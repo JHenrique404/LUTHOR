@@ -1,0 +1,30 @@
+# deps e builds
+node_modules/
+out/
+dist/
+release/
+.vite/
+
+# ambiente e segredos (nunca publicar)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# bancos locais
+*.sqlite
+*.sqlite3
+*.db
+
+# logs
+*.log
+logs/
+npm-debug.log*
+
+# sistema / editor / config pessoal
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/

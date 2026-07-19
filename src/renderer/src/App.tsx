@@ -1,0 +1,69 @@
+import { useEffect } from 'react'
+import { HashRouter, NavLink, Route, Routes } from 'react-router-dom'
+import { useRunStore } from '@renderer/stores/run-store'
+import { HomePage } from '@renderer/pages/HomePage'
+import { AgentOfficePage } from '@renderer/pages/AgentOfficePage'
+import { RunDetailPage } from '@renderer/pages/RunDetailPage'
+import { ConnectionsPage } from '@renderer/pages/ConnectionsPage'
+import { SettingsPage } from '@renderer/pages/SettingsPage'
+
+const NAV_ITEMS = [
+  { to: '/', label: 'Início' },
+  { to: '/office', label: 'Agent Office' },
+  { to: '/run', label: 'Run' },
+  { to: '/connections', label: 'Conexões' },
+  { to: '/settings', label: 'Config' }
+]
+
+export function App(): React.JSX.Element {
+  const init = useRunStore((s) => s.init)
+
+  useEffect(() => {
+    void init()
+  }, [init])
+
+  return (
+    <HashRouter>
+      {/* overflow-hidden no shell: sidebar ocupa a altura toda; só o main rola. */}
+      <div className="flex h-full overflow-hidden">
+        <nav
+          aria-label="Navegação principal"
+          className="flex h-full w-44 shrink-0 flex-col gap-1 overflow-y-auto border-r-2 border-night-700 bg-night-950 p-3"
+        >
+          <div className="mb-4 px-2">
+            <span className="font-pixel text-cyan-glow text-sm tracking-widest">LUTHOR</span>
+            <span className="font-pixel mt-1 block text-[8px] uppercase text-warn">
+              fase 1 · simulado
+            </span>
+          </div>
+          {NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/'}
+              className={({ isActive }) =>
+                `font-pixel px-3 py-2 text-[11px] tracking-wide uppercase transition-colors ${
+                  isActive
+                    ? 'bg-night-700 text-cyan-glow shadow-[inset_3px_0_0_0_var(--color-cyan-glow)]'
+                    : 'text-ink-dim hover:bg-night-800 hover:text-ink'
+                }`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <main className="h-full min-w-0 flex-1 overflow-y-auto bg-night-900">
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/office" element={<AgentOfficePage />} />
+            <Route path="/run" element={<RunDetailPage />} />
+            <Route path="/connections" element={<ConnectionsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </main>
+      </div>
+    </HashRouter>
+  )
+}
