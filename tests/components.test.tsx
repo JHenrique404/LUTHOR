@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Question, RunSnapshot } from '@shared/domain'
 import { StepProgress } from '@renderer/components/ui/StepProgress'
+import { RunProgressSummary } from '@renderer/components/ui/RunProgressSummary'
 import { AgentCard } from '@renderer/components/office/AgentCard'
 import { ComposerModal } from '@renderer/components/office/ComposerModal'
 import { DecisionBox } from '@renderer/components/office/DecisionBox'
@@ -31,10 +32,63 @@ function makeQuestion(id: string, agentId: string, text: string): Question {
 }
 
 describe('StepProgress', () => {
+  const makeSteps = (statuses: Array<'verified' | 'in_progress' | 'pending' | 'failed'>) =>
+    statuses.map((status, i) => ({
+      id: `s-${i + 1}`,
+      runId: 'r',
+      index: i + 1,
+      title: `Etapa ${i + 1}`,
+      status,
+      assignedAgentId: null
+    }))
+
+  const successBlocks = (container: HTMLElement): number =>
+    container.querySelectorAll('[data-step-status="verified"]').length
+
   it('mostra progresso derivado, nunca porcentagem', () => {
     render(<StepProgress steps={snapshot.steps} />)
     expect(screen.getByText('3 de 5 etapas verificadas')).toBeInTheDocument()
     expect(screen.queryByText(/%/)).not.toBeInTheDocument()
+  })
+
+  it('REGRESSÃO 1/5: exatamente UM bloco de sucesso, mesmo com in_progress na barra', () => {
+    const { container } = render(
+      <StepProgress steps={makeSteps(['verified', 'in_progress', 'pending', 'pending', 'pending'])} />
+    )
+    expect(screen.getByRole('img', { name: '1 de 5 etapas verificadas' })).toBeInTheDocument()
+    expect(successBlocks(container)).toBe(1)
+    // in_progress nunca conta nem parece sucesso (estilo próprio, sem bg-exec).
+    const inProgress = container.querySelector('[data-step-status="in_progress"]')
+    expect(inProgress).not.toBeNull()
+    expect(inProgress!.className).not.toContain('bg-exec')
+  })
+
+  it('REGRESSÃO 1/5 com a ÚLTIMA etapa verificada: só o quinto bloco é sucesso', () => {
+    const { container } = render(
+      <StepProgress
+        steps={makeSteps(['in_progress', 'in_progress', 'pending', 'pending', 'verified'])}
+      />
+    )
+    expect(screen.getByRole('img', { name: '1 de 5 etapas verificadas' })).toBeInTheDocument()
+    const blocks = Array.from(container.querySelectorAll('[data-step-status]'))
+    expect(blocks.map((b) => b.getAttribute('data-step-status'))).toEqual([
+      'in_progress',
+      'in_progress',
+      'pending',
+      'pending',
+      'verified'
+    ])
+    expect(successBlocks(container)).toBe(1)
+  })
+
+  it('5/5: todos os cinco blocos em sucesso', () => {
+    const { container } = render(
+      <StepProgress
+        steps={makeSteps(['verified', 'verified', 'verified', 'verified', 'verified'])}
+      />
+    )
+    expect(screen.getByRole('img', { name: '5 de 5 etapas verificadas' })).toBeInTheDocument()
+    expect(successBlocks(container)).toBe(5)
   })
 })
 
@@ -158,6 +212,55 @@ describe('DecisionBox', () => {
         expect.objectContaining({ questionId: 'q-2', freeText: '__Host-luthor' })
       ])
     )
+  })
+})
+
+describe('RunProgressSummary — resumo agregado da barra superior', () => {
+  const makeSteps = (statuses: Array<'verified' | 'in_progress' | 'pending' | 'failed'>) =>
+    statuses.map((status, i) => ({
+      id: `s-${i + 1}`,
+      runId: 'r',
+      index: i + 1,
+      title: `Etapa ${i + 1}`,
+      status,
+      assignedAgentId: null
+    }))
+
+  const aggBlocks = (container: HTMLElement): string[] =>
+    Array.from(container.querySelectorAll('[data-agg-block]')).map(
+      (b) => b.getAttribute('data-agg-block') ?? ''
+    )
+
+  it('REGRESSÃO squad: #01 e #05 verificadas => dois PRIMEIROS blocos verdes, nunca o último', () => {
+    // Cenário real da squad: bugs 1 e 5 corrigidos, 2 e 3 em execução, 4 na fila.
+    const { container } = render(
+      <RunProgressSummary
+        steps={makeSteps(['verified', 'in_progress', 'in_progress', 'pending', 'verified'])}
+      />
+    )
+    expect(aggBlocks(container)).toEqual(['verified', 'verified', 'active', 'neutral', 'neutral'])
+    expect(
+      screen.getByRole('img', {
+        name: '2 de 5 etapas verificadas · 2 em execução · 1 na fila'
+      })
+    ).toBeInTheDocument()
+  })
+
+  it('no máximo UM indicador ciano; sem trabalho em andamento, nenhum', () => {
+    const { container } = render(
+      <RunProgressSummary steps={makeSteps(['verified', 'pending', 'pending', 'pending', 'pending'])} />
+    )
+    expect(aggBlocks(container)).toEqual(['verified', 'neutral', 'neutral', 'neutral', 'neutral'])
+  })
+
+  it('5 de 5: todos os blocos verdes', () => {
+    const { container } = render(
+      <RunProgressSummary
+        steps={makeSteps(['verified', 'verified', 'verified', 'verified', 'verified'])}
+      />
+    )
+    expect(aggBlocks(container)).toEqual(['verified', 'verified', 'verified', 'verified', 'verified'])
+    expect(screen.getByRole('img', { name: '5 de 5 etapas verificadas' })).toBeInTheDocument()
   })
 })
 

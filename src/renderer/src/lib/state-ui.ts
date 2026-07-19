@@ -47,7 +47,13 @@ export const RUN_STATE_STYLE: Record<RunState, StateStyle> = {
 
 export const STEP_STATUS_STYLE: Record<StepStatus, StateStyle> = {
   pending: { text: 'text-ink-dim', bg: 'bg-night-700', dot: 'bg-ink-faint', anim: '' },
-  in_progress: { text: 'text-exec', bg: 'bg-exec-soft', dot: 'bg-exec', anim: 'anim-pulse' },
+  // Em andamento é CIANO (não verde): nunca pode ler como "verificado".
+  in_progress: {
+    text: 'text-cyan-glow',
+    bg: 'bg-exec-soft',
+    dot: 'bg-cyan-glow',
+    anim: 'anim-pulse'
+  },
   verified: { text: 'text-exec', bg: 'bg-exec-soft', dot: 'bg-exec', anim: '' },
   failed: { text: 'text-alert', bg: 'bg-alert-soft', dot: 'bg-alert', anim: '' }
 }

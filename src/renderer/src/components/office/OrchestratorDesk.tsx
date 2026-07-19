@@ -4,7 +4,7 @@ import { AGENT_STATE_STYLE, RUN_STATE_STYLE } from '@renderer/lib/state-ui'
 import { PixelBadge } from '@renderer/components/ui/PixelBadge'
 import { PixelPanel } from '@renderer/components/ui/PixelPanel'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
-import { StepProgress } from '@renderer/components/ui/StepProgress'
+import { RunProgressSummary } from '@renderer/components/ui/RunProgressSummary'
 import { AgentAvatar } from './AgentAvatar'
 
 interface OrchestratorDeskProps {
@@ -69,7 +69,7 @@ export function OrchestratorDesk({
               {AGENT_STATE_LABELS[orchestrator.state]}
             </PixelBadge>
           </div>
-          <StepProgress steps={steps} />
+          <RunProgressSummary steps={steps} />
         </div>
       </div>
     </PixelPanel>

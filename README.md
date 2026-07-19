@@ -148,14 +148,24 @@ Verificador abre uma **pergunta pendente** (expiração de sessão); responder
 destrava a verificação da etapa 4 e o Frontend, até o run completar.
 **Pausar tudo** congela o timer de eventos de verdade; **Retomar** continua.
 
-## Roadmap — bandeja do sistema (não implementado)
+## Bandeja do sistema (implementado para a simulação)
 
-Quando existirem agentes reais em segundo plano (Fase 2+), o comportamento desejado:
+O LUTHOR agora vive na bandeja do Windows, ao lado do relógio:
 
-- Clicar no X com trabalho ativo **minimiza para a bandeja** em vez de encerrar.
-- Menu da bandeja: **Abrir LUTHOR**, **Pausar tudo**, **Retomar** e **Sair completamente**.
-- A preferência será configurável nas Configurações.
-- O encerramento real sempre deve estar disponível.
+- Clicar no **X** não encerra: a janela é ocultada e o `SimulationEngine` continua
+  rodando (run em execução avança; run pausado permanece pausado). Uma notificação
+  explica isso na primeira vez.
+- Clique no ícone da bandeja (ou "Abrir LUTHOR" no menu) restaura e foca a janela.
+- Menu de contexto: **Abrir LUTHOR** · **Pausar tudo** (só com run ativo) ·
+  **Retomar tudo** (só com run pausado) · **Sair do LUTHOR** (encerramento real,
+  sempre disponível). Sem trabalho ativo, pausar/retomar somem do menu.
+- Ícone pixel original gerado em código (`src/main/tray/tray-icon.ts`) — sem asset
+  externo e sem dependência de caminho, funcionando igual no empacotamento.
+- Toda a lógica fica no processo main (`lifecycle/window-lifecycle.ts`, `tray/`);
+  o renderer continua limitado à bridge IPC segura.
+
+Roadmap: preferência configurável nas Configurações para escolher entre
+"minimizar para a bandeja" e "encerrar ao clicar no X".
 
 ## Direção visual
 

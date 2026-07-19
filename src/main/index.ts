@@ -1,10 +1,16 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Menu, Notification, shell, Tray } from 'electron'
 import { IpcChannels } from '@shared/ipc/contract'
 import { createRepository } from './services/db/in-memory-repository'
 import { createProviders } from './services/integrations/agent-provider'
 import { SimulationEngine } from './services/simulation/simulation-engine'
 import { registerIpcHandlers } from './ipc/register'
+import { WindowLifecycle } from './lifecycle/window-lifecycle'
+import { buildTrayMenuTemplate } from './tray/tray-menu'
+import { createTrayIcon, createWindowIcon } from './tray/tray-icon'
+
+// Necessário para notificações nativas no Windows (mesmo appId do electron-builder).
+app.setAppUserModelId('dev.luthor.app')
 
 async function bootstrap(): Promise<void> {
   const repository = createRepository()
@@ -12,12 +18,35 @@ async function bootstrap(): Promise<void> {
   const seedSnapshot = await repository.getRunSnapshot()
 
   let mainWindow: BrowserWindow | null = null
+  let tray: Tray | null = null
+  let updateTrayMenu: () => void = () => {}
 
   const engine = new SimulationEngine({
     snapshot: seedSnapshot,
     emit: (payload) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(IpcChannels.simEvent, payload)
+      }
+      // Estado do run muda -> menu da bandeja acompanha (Pausar/Retomar).
+      updateTrayMenu()
+    }
+  })
+
+  const lifecycle = new WindowLifecycle({
+    hideWindow: () => mainWindow?.hide(),
+    showWindow: () => {
+      if (!mainWindow) return
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    },
+    quit: () => app.quit(),
+    notifyFirstHide: () => {
+      if (Notification.isSupported()) {
+        new Notification({
+          title: 'LUTHOR continua ativo',
+          body: 'A simulação segue rodando na bandeja, ao lado do relógio. Use "Sair do LUTHOR" no menu da bandeja para encerrar de verdade.'
+        }).show()
       }
     }
   })
@@ -33,6 +62,16 @@ async function bootstrap(): Promise<void> {
     autoHideMenuBar: true,
     backgroundColor: '#0b1020',
     title: 'LUTHOR',
+    // Ícone original pixel do LUTHOR (taskbar/alt-tab) — nunca o padrão do Electron.
+    icon: createWindowIcon(),
+    // Barra de título integrada à identidade: fundo azul-noite, controles
+    // NATIVOS preservados (min/max/X — o X segue caindo na lógica da bandeja).
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#070b16',
+      symbolColor: '#45d8e8',
+      height: 36
+    },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -42,6 +81,18 @@ async function bootstrap(): Promise<void> {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // X da janela: oculta para a bandeja; engine e timers seguem rodando.
+  mainWindow.on('close', (event) => {
+    if (lifecycle.handleWindowClose()) {
+      event.preventDefault()
+      console.log('[luthor] janela oculta na bandeja — simulação continua')
+    }
+  })
+  mainWindow.on('closed', () => {
+    engine.stop()
+    mainWindow = null
+  })
 
   // Único protocolo permitido para abrir no navegador do sistema.
   const EXTERNAL_PROTOCOLS = new Set(['https:'])
@@ -82,10 +133,36 @@ async function bootstrap(): Promise<void> {
   })
 
   mainWindow.webContents.on('did-finish-load', () => engine.start())
-  mainWindow.on('closed', () => {
-    engine.stop()
-    mainWindow = null
+
+  // ── Bandeja do Windows ─────────────────────────────────────────────────
+  tray = new Tray(createTrayIcon())
+  tray.setToolTip('LUTHOR — central de agentes (simulação ativa)')
+  tray.on('click', () => lifecycle.handleActivate())
+
+  updateTrayMenu = () => {
+    if (!tray) return
+    tray.setContextMenu(
+      Menu.buildFromTemplate(
+        buildTrayMenuTemplate(engine.getRunState(), {
+          onOpen: () => lifecycle.handleActivate(),
+          onPauseAll: () => void engine.pauseAll(),
+          onResumeAll: () => void engine.resumeAll(),
+          onQuit: () => {
+            console.log('[luthor] saída explícita pela bandeja — encerrando')
+            lifecycle.requestQuit()
+          }
+        })
+      )
+    )
+  }
+  updateTrayMenu()
+
+  app.on('before-quit', () => lifecycle.markQuitting())
+  app.on('will-quit', () => {
+    tray?.destroy()
+    tray = null
   })
+  app.on('activate', () => lifecycle.handleActivate())
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     await mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -96,12 +173,10 @@ async function bootstrap(): Promise<void> {
 
 app.whenReady().then(() => {
   void bootstrap()
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) void bootstrap()
-  })
 })
 
+// A janela real só fecha na saída explícita; ocultar não dispara este evento.
+// Quando fechar de verdade, encerra o processo por completo.
 app.on('window-all-closed', () => {
   app.quit()
 })

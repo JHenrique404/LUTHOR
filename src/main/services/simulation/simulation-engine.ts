@@ -107,6 +107,11 @@ export class SimulationEngine {
     return structuredClone(this.snapshot)
   }
 
+  /** Estado atual do run sem clonar o snapshot (para menu da bandeja). */
+  getRunState(): RunState {
+    return this.snapshot.run.state
+  }
+
   start(): void {
     this.schedule()
   }
