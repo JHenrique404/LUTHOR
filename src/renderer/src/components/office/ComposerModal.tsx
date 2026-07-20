@@ -14,6 +14,8 @@ interface ComposerModalProps {
   agents: Agent[]
   /** "Continuar a partir deste run": vínculo conceitual mockado. */
   continuedFromRunId?: string
+  /** Executor real (Codex): disponível só quando a CLI está pronta. */
+  codexAvailability?: { ok: boolean; reason?: string }
   onClose: () => void
   onSubmitNewTask: (input: NewTaskInput) => void
   onSubmitInstruction: (input: UserDirectionInput) => void
@@ -44,6 +46,7 @@ export function ComposerModal({
   kind,
   agents,
   continuedFromRunId,
+  codexAvailability,
   onClose,
   onSubmitNewTask,
   onSubmitInstruction
@@ -94,21 +97,34 @@ export function ComposerModal({
         {isNewTask && (
           <fieldset>
             <legend className="font-pixel mb-2 text-[10px] uppercase text-ink-faint">
-              Modo de simulação
+              Modo de execução
             </legend>
             <div className="flex flex-wrap gap-2">
               {(
                 [
-                  { id: 'standard', label: 'Fluxo padrão' },
-                  { id: 'squad_demo', label: 'Demo: corrigir cinco bugs (squad)' }
+                  { id: 'standard', label: 'Simulado: fluxo padrão', disabled: false },
+                  {
+                    id: 'squad_demo',
+                    label: 'Simulado: corrigir cinco bugs (squad)',
+                    disabled: false
+                  },
+                  {
+                    id: 'codex',
+                    label: 'EXECUTOR CODEX (real)',
+                    disabled: !(codexAvailability?.ok ?? false)
+                  }
                 ] as const
               ).map((m) => (
                 <label
                   key={m.id}
-                  className={`pixel-frame flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs ${
-                    mode === m.id
-                      ? 'bg-orch-soft text-orch [--px-border:var(--color-orch)]'
-                      : 'text-ink-dim [--px-border:var(--color-night-500)] hover:text-ink'
+                  className={`pixel-frame flex items-center gap-2 px-3 py-1.5 text-xs ${
+                    m.disabled
+                      ? 'cursor-not-allowed text-ink-faint opacity-60 [--px-border:var(--color-night-600)]'
+                      : mode === m.id
+                        ? m.id === 'codex'
+                          ? 'cursor-pointer bg-exec-soft text-exec [--px-border:var(--color-exec)]'
+                          : 'cursor-pointer bg-orch-soft text-orch [--px-border:var(--color-orch)]'
+                        : 'cursor-pointer text-ink-dim [--px-border:var(--color-night-500)] hover:text-ink'
                   }`}
                 >
                   <input
@@ -116,6 +132,7 @@ export function ComposerModal({
                     name="composer-mode"
                     value={m.id}
                     checked={mode === m.id}
+                    disabled={m.disabled}
                     onChange={() => setMode(m.id)}
                     className="accent-(--color-orch)"
                   />
@@ -123,6 +140,19 @@ export function ComposerModal({
                 </label>
               ))}
             </div>
+            {!codexAvailability?.ok && (
+              <p className="mt-2 text-[11px] text-ink-faint">
+                Executor real indisponível:{' '}
+                {codexAvailability?.reason ?? 'verificando a CLI do Codex…'}
+              </p>
+            )}
+            {mode === 'codex' && (
+              <p className="mt-2 text-[11px] leading-relaxed text-warn">
+                Modo REAL: o Codex CLI vai trabalhar de verdade dentro do workspace ativo
+                (sandbox workspace-write). Nada fora da pasta é alterado sem confirmação da
+                própria CLI.
+              </p>
+            )}
           </fieldset>
         )}
 
@@ -197,17 +227,23 @@ export function ComposerModal({
         </label>
 
         <p className="text-[11px] text-ink-faint">
-          {isNewTask
-            ? 'Fase 1: cria um novo run simulado no workspace ativo — nenhuma IA real é chamada.'
-            : 'Fase 1: registra apenas um evento simulado no run atual — nenhuma IA real é chamada.'}
+          {!isNewTask
+            ? 'Registra apenas um evento simulado no run atual — nenhuma IA real é chamada.'
+            : mode === 'codex'
+              ? 'Cria um run REAL no workspace ativo, executado pelo Codex CLI da sua máquina.'
+              : 'Cria um novo run simulado no workspace ativo — nenhuma IA real é chamada.'}
         </p>
 
         <div className="flex justify-end gap-2">
           <PixelButton variant="ghost" onClick={onClose}>
             Cancelar
           </PixelButton>
-          <PixelButton variant="orch" type="submit" disabled={!canSubmit}>
-            {isNewTask ? 'Criar run' : 'Registrar instrução'}
+          <PixelButton
+            variant={isNewTask && mode === 'codex' ? 'primary' : 'orch'}
+            type="submit"
+            disabled={!canSubmit}
+          >
+            {!isNewTask ? 'Registrar instrução' : mode === 'codex' ? 'Executar de verdade' : 'Criar run'}
           </PixelButton>
         </div>
       </form>

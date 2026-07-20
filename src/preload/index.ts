@@ -54,7 +54,8 @@ const api: LuthorApi = {
     remove: (profileId: string) => ipcRenderer.invoke(IpcChannels.profileDelete, profileId)
   },
   connections: {
-    list: () => ipcRenderer.invoke(IpcChannels.connectionsList)
+    list: () => ipcRenderer.invoke(IpcChannels.connectionsList),
+    refresh: () => ipcRenderer.invoke(IpcChannels.connectionsRefresh)
   }
 }
 

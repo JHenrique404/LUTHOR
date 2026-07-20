@@ -17,6 +17,7 @@ import type { Repository } from '../services/db/repository'
 import type { SimulationEngine } from '../services/simulation/simulation-engine'
 import type { AgentProvider } from '../services/integrations/agent-provider'
 import type { WorkspaceService } from '../services/workspaces/workspace-service'
+import type { RunCoordinator } from '../services/run-coordinator'
 
 /**
  * O main não confia nos tipos do preload/renderer: todo payload IPC
@@ -31,12 +32,20 @@ function parseIpc<T>(schema: ZodType<T>, value: unknown, channel: string): T {
   return result.data
 }
 
-export function registerIpcHandlers(
-  repository: Repository,
-  engine: SimulationEngine,
-  providers: AgentProvider[],
+export interface RegisterIpcDeps {
+  repository: Repository
+  /** Roteia comandos para o run ativo (simulado OU executor real). */
+  coordinator: RunCoordinator
+  /** Só para sincronizar perfis editados com a simulação. */
+  simEngine: SimulationEngine
+  providers: AgentProvider[]
   workspaces: WorkspaceService
-): void {
+  /** Reexecuta a detecção real da CLI (Fase 2B). */
+  refreshConnections: () => Promise<void>
+}
+
+export function registerIpcHandlers(deps: RegisterIpcDeps): void {
+  const { repository, coordinator, simEngine: engine, providers, workspaces } = deps
   ipcMain.handle(IpcChannels.workspaceState, () => workspaces.state())
 
   // "Abrir workspace" seleciona uma pasta no diálogo NATIVO; o caminho é
@@ -63,30 +72,34 @@ export function registerIpcHandlers(
     workspaces.remove(parseIpc(WorkspaceIdSchema, workspaceId, IpcChannels.workspaceRemove))
   )
 
-  ipcMain.handle(IpcChannels.runSnapshot, () => engine.getSnapshot())
-  ipcMain.handle(IpcChannels.simPauseAll, () => engine.pauseAll())
-  ipcMain.handle(IpcChannels.simResumeAll, () => engine.resumeAll())
-  ipcMain.handle(IpcChannels.simCancelRun, () => engine.cancelRun())
+  ipcMain.handle(IpcChannels.runSnapshot, () => coordinator.getSnapshot())
+  ipcMain.handle(IpcChannels.simPauseAll, () => coordinator.pauseAll())
+  ipcMain.handle(IpcChannels.simResumeAll, () => coordinator.resumeAll())
+  ipcMain.handle(IpcChannels.simCancelRun, () => coordinator.cancelRun())
 
   ipcMain.handle(IpcChannels.simPauseAgent, (_e, agentId: unknown) =>
-    engine.pauseAgent(parseIpc(AgentIdSchema, agentId, IpcChannels.simPauseAgent))
+    coordinator.pauseAgent(parseIpc(AgentIdSchema, agentId, IpcChannels.simPauseAgent))
   )
   ipcMain.handle(IpcChannels.simResumeAgent, (_e, agentId: unknown) =>
-    engine.resumeAgent(parseIpc(AgentIdSchema, agentId, IpcChannels.simResumeAgent))
+    coordinator.resumeAgent(parseIpc(AgentIdSchema, agentId, IpcChannels.simResumeAgent))
   )
   ipcMain.handle(IpcChannels.simAnswerQuestion, (_e, input: unknown) =>
-    engine.answerQuestion(parseIpc(AnswerQuestionInputSchema, input, IpcChannels.simAnswerQuestion))
+    coordinator.answerQuestion(
+      parseIpc(AnswerQuestionInputSchema, input, IpcChannels.simAnswerQuestion)
+    )
   )
   ipcMain.handle(IpcChannels.simAnswerQuestions, (_e, inputs: unknown) =>
-    engine.answerQuestions(
+    coordinator.answerQuestions(
       parseIpc(AnswerQuestionsBatchSchema, inputs, IpcChannels.simAnswerQuestions)
     )
   )
   ipcMain.handle(IpcChannels.simUserDirection, (_e, input: unknown) =>
-    engine.addUserDirection(parseIpc(UserDirectionInputSchema, input, IpcChannels.simUserDirection))
+    coordinator.addUserDirection(
+      parseIpc(UserDirectionInputSchema, input, IpcChannels.simUserDirection)
+    )
   )
   ipcMain.handle(IpcChannels.simNewTask, (_e, input: unknown) =>
-    engine.startNewRun(parseIpc(NewTaskInputSchema, input, IpcChannels.simNewTask))
+    coordinator.startNewTask(parseIpc(NewTaskInputSchema, input, IpcChannels.simNewTask))
   )
 
   // Mutações de perfil também sincronizam a cópia do engine, para a
@@ -129,4 +142,8 @@ export function registerIpcHandlers(
   ipcMain.handle(IpcChannels.connectionsList, () =>
     Promise.all(providers.map((p) => p.getStatus()))
   )
+  ipcMain.handle(IpcChannels.connectionsRefresh, async () => {
+    await deps.refreshConnections()
+    return Promise.all(providers.map((p) => p.getStatus()))
+  })
 }

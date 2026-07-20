@@ -23,6 +23,7 @@ import { StepProgress } from '@renderer/components/ui/StepProgress'
 export function RunDetailPage(): React.JSX.Element {
   const { snapshot } = useRunStore()
   const [tab, setTab] = useState('plan')
+  const [logFilter, setLogFilter] = useState('')
   const now = useNow(1000)
 
   if (!snapshot) {
@@ -147,15 +148,34 @@ export function RunDetailPage(): React.JSX.Element {
             id: 'logs',
             label: 'Logs',
             content: (
-              <pre className="pixel-frame-inset font-logs max-h-[50vh] overflow-y-auto bg-night-950 p-4 text-[11px] leading-relaxed whitespace-pre-wrap text-ink-dim">
-                {snapshot.events
-                  .map((e) => {
-                    const agent = snapshot.agents.find((a) => a.id === e.agentId)
-                    const who = agent ? AGENT_ROLE_LABELS[agent.role] : 'sistema'
-                    return `[${formatClock(e.at)}] [${who}] ${e.message}`
-                  })
-                  .join('\n')}
-              </pre>
+              <div className="space-y-2">
+                <label className="block">
+                  <span className="font-pixel mb-1 block text-[9px] uppercase text-ink-faint">
+                    Filtrar logs
+                  </span>
+                  <input
+                    type="search"
+                    value={logFilter}
+                    onChange={(e) => setLogFilter(e.target.value)}
+                    placeholder="Ex.: erro, stderr, verificada…"
+                    className="pixel-frame-inset w-full max-w-sm bg-night-950 px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+                  />
+                </label>
+                <pre className="pixel-frame-inset font-logs max-h-[50vh] overflow-y-auto bg-night-950 p-4 text-[11px] leading-relaxed whitespace-pre-wrap text-ink-dim">
+                  {snapshot.events
+                    .map((e) => {
+                      const agent = snapshot.agents.find((a) => a.id === e.agentId)
+                      const who = agent ? AGENT_ROLE_LABELS[agent.role] : 'sistema'
+                      return `[${formatClock(e.at)}] [${who}] ${e.message}`
+                    })
+                    .filter((line) =>
+                      logFilter.trim().length === 0
+                        ? true
+                        : line.toLowerCase().includes(logFilter.trim().toLowerCase())
+                    )
+                    .join('\n')}
+                </pre>
+              </div>
             )
           },
           {

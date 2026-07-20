@@ -40,14 +40,14 @@ export const UserDirectionInputSchema = z
 export type UserDirectionInput = z.infer<typeof UserDirectionInputSchema>
 
 /**
- * "Nova tarefa": cria um NOVO run simulado no workspace ativo.
- * mode 'standard' = fluxo padrão sequencial; 'squad_demo' = cenário
- * demonstrável de squad dinâmica (só quando escolhido explicitamente).
+ * "Nova tarefa": cria um NOVO run no workspace ativo.
+ * mode 'standard' = simulação sequencial; 'squad_demo' = demo de squad
+ * simulada; 'codex' = EXECUTOR REAL via Codex CLI (Fase 2B).
  */
 export const NewTaskInputSchema = z
   .object({
     text: z.string().min(3).max(2000),
-    mode: z.enum(['standard', 'squad_demo']),
+    mode: z.enum(['standard', 'squad_demo', 'codex']),
     /** "Continuar a partir deste run": vínculo conceitual mockado com o run anterior. */
     continuedFromRunId: z.string().min(1).max(128).optional()
   })

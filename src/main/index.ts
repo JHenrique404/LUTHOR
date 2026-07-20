@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, Menu, Notification, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, Menu, Notification, shell, Tray } from 'electron'
 import { IpcChannels } from '@shared/ipc/contract'
 import { createRepository } from './services/db/in-memory-repository'
 import { createSeedWorkspaces } from './services/db/seed'
@@ -7,6 +7,9 @@ import { createProviders } from './services/integrations/agent-provider'
 import { JsonWorkspaceRegistry } from './services/workspaces/workspace-registry'
 import { WorkspaceService } from './services/workspaces/workspace-service'
 import { SimulationEngine } from './services/simulation/simulation-engine'
+import { CodexDetector } from './services/codex/codex-detector'
+import { CodexRunManager } from './services/codex/codex-run-manager'
+import { RunCoordinator } from './services/run-coordinator'
 import { registerIpcHandlers } from './ipc/register'
 import { WindowLifecycle } from './lifecycle/window-lifecycle'
 import { buildTrayMenuTemplate } from './tray/tray-menu'
@@ -17,7 +20,10 @@ app.setAppUserModelId('dev.luthor.app')
 
 async function bootstrap(): Promise<void> {
   const repository = createRepository()
-  const providers = createProviders()
+  // Detecção real do Codex CLI (Fase 2B): leitura apenas; sem login automático.
+  const codexDetector = new CodexDetector()
+  void codexDetector.refresh().catch(() => {})
+  const providers = createProviders(codexDetector)
   const seedSnapshot = await repository.getRunSnapshot()
 
   // Registro PERSISTENTE de workspaces (Fase 2A): JSON versionado com
@@ -31,24 +37,37 @@ async function bootstrap(): Promise<void> {
   let tray: Tray | null = null
   let updateTrayMenu: () => void = () => {}
 
+  const emitToRenderer = (payload: unknown): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IpcChannels.simEvent, payload)
+    }
+    // Estado do run muda -> menu da bandeja acompanha (Pausar/Cancelar/Retomar).
+    updateTrayMenu()
+  }
+
   const engine = new SimulationEngine({
     snapshot: seedSnapshot,
-    emit: (payload) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(IpcChannels.simEvent, payload)
-      }
-      // Estado do run muda -> menu da bandeja acompanha (Pausar/Retomar).
-      updateTrayMenu()
-    }
+    emit: emitToRenderer
+  })
+
+  // Run REAL (Fase 2B): um único processo Codex por vez, transcript em userData.
+  const codexManager = new CodexRunManager({
+    emit: emitToRenderer,
+    dataDir: app.getPath('userData')
   })
 
   // O run demo abre apontando para o workspace ativo persistido.
   const activeWorkspace = workspaceRegistry.getActive()
   if (activeWorkspace) engine.setWorkspace(activeWorkspace)
 
+  const coordinator = new RunCoordinator(engine, codexManager, codexDetector, () =>
+    workspaceRegistry.getActive()
+  )
+
   const workspaceService = new WorkspaceService({
     registry: workspaceRegistry,
-    isRunBusy: () => engine.isBusy(),
+    // Run real TAMBÉM bloqueia troca de workspace (um executor por vez).
+    isRunBusy: () => coordinator.isBusy(),
     onActiveChanged: (workspace) => engine.setWorkspace(workspace)
   })
 
@@ -71,7 +90,16 @@ async function bootstrap(): Promise<void> {
     }
   })
 
-  registerIpcHandlers(repository, engine, providers, workspaceService)
+  registerIpcHandlers({
+    repository,
+    coordinator,
+    simEngine: engine,
+    providers,
+    workspaces: workspaceService,
+    refreshConnections: async () => {
+      await codexDetector.refresh()
+    }
+  })
 
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -102,11 +130,11 @@ async function bootstrap(): Promise<void> {
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
 
-  // X da janela: oculta para a bandeja; engine e timers seguem rodando.
+  // X da janela: oculta para a bandeja; simulação E processo real seguem rodando.
   mainWindow.on('close', (event) => {
     if (lifecycle.handleWindowClose()) {
       event.preventDefault()
-      console.log('[luthor] janela oculta na bandeja — simulação continua')
+      console.log('[luthor] janela oculta na bandeja — execução continua')
     }
   })
   mainWindow.on('closed', () => {
@@ -159,19 +187,55 @@ async function bootstrap(): Promise<void> {
   tray.setToolTip('LUTHOR — central de agentes (simulação ativa)')
   tray.on('click', () => lifecycle.handleActivate())
 
+  /**
+   * Saída explícita. Com run REAL em execução, pergunta antes:
+   * "Cancelar e sair" (interrompe graciosamente, força após 5s) ou
+   * "Manter aberto".
+   */
+  const requestQuitWithRealRunGuard = async (): Promise<void> => {
+    if (coordinator.isRealRunBusy() && mainWindow && !mainWindow.isDestroyed()) {
+      lifecycle.handleActivate()
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Execução real em andamento',
+        message: 'Há uma tarefa REAL do Codex em execução neste momento.',
+        detail: 'Sair agora vai cancelar o processo (graciosamente; forçado após 5s).',
+        buttons: ['Cancelar run e sair', 'Manter aberto'],
+        defaultId: 1,
+        cancelId: 1
+      })
+      if (response !== 0) return
+      coordinator.cancelRun()
+      // Dá até 6s para o processo encerrar antes de derrubar o app.
+      await new Promise<void>((resolve) => {
+        const started = Date.now()
+        const poll = setInterval(() => {
+          if (!coordinator.isRealRunBusy() || Date.now() - started > 6000) {
+            clearInterval(poll)
+            resolve()
+          }
+        }, 250)
+      })
+    }
+    console.log('[luthor] saída explícita — encerrando')
+    lifecycle.requestQuit()
+  }
+
   updateTrayMenu = () => {
     if (!tray) return
     tray.setContextMenu(
       Menu.buildFromTemplate(
-        buildTrayMenuTemplate(engine.getRunState(), {
-          onOpen: () => lifecycle.handleActivate(),
-          onPauseAll: () => void engine.pauseAll(),
-          onResumeAll: () => void engine.resumeAll(),
-          onQuit: () => {
-            console.log('[luthor] saída explícita pela bandeja — encerrando')
-            lifecycle.requestQuit()
-          }
-        })
+        buildTrayMenuTemplate(
+          coordinator.getRunState(),
+          {
+            onOpen: () => lifecycle.handleActivate(),
+            onPauseAll: () => void coordinator.pauseAll(),
+            onResumeAll: () => void coordinator.resumeAll(),
+            onCancelRun: () => void coordinator.cancelRun(),
+            onQuit: () => void requestQuitWithRealRunGuard()
+          },
+          coordinator.getExecutor()
+        )
       )
     )
   }

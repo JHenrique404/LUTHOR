@@ -85,10 +85,17 @@ export const TaskSchema = z.object({
 })
 export type Task = z.infer<typeof TaskSchema>
 
+/** Quem executa o run: simulação da Fase 1 ou o executor real (Fase 2B). */
+export const RunExecutorSchema = z.enum(['simulated', 'codex_cli'])
+export type RunExecutor = z.infer<typeof RunExecutorSchema>
+
 export const RunSchema = z.object({
   id: z.string(),
   taskId: z.string(),
   state: RunStateSchema,
+  executor: RunExecutorSchema.default('simulated'),
+  /** Cancelamento gracioso solicitado; aguardando o processo encerrar. */
+  cancelRequested: z.boolean().default(false),
   startedAt: z.number(),
   updatedAt: z.number()
 })

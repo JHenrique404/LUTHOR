@@ -48,6 +48,7 @@ export const IpcChannels = {
   profileDuplicate: 'luthor:profiles:duplicate',
   profileDelete: 'luthor:profiles:delete',
   connectionsList: 'luthor:connections:list',
+  connectionsRefresh: 'luthor:connections:refresh',
   /** main -> renderer (webContents.send) */
   simEvent: 'luthor:sim:event'
 } as const
@@ -58,12 +59,20 @@ export interface SimEventPayload {
   snapshot: RunSnapshot
 }
 
-/** Status mockado de uma conexão de provider (Fase 1: sempre não configurado). */
+/**
+ * Status de uma conexão de provider.
+ * Fase 2B: o Codex é detectado DE VERDADE no main (binário, versão, auth);
+ * os demais continuam mockados. Nunca expõe credenciais — só o estado.
+ */
 export interface ConnectionStatus {
   id: ProviderKind
   name: string
-  status: 'not_configured' | 'configured' | 'error'
+  status: 'not_configured' | 'configured' | 'needs_auth' | 'error'
   detail: string
+  /** Versão real informada pela CLI, quando detectada. */
+  version?: string | null
+  /** true/false quando a checagem de auth é suportada; null = não verificado. */
+  authenticated?: boolean | null
 }
 
 // ── Workspaces (Fase 2A: registro local real e persistente) ──────────────
@@ -150,5 +159,7 @@ export interface LuthorApi {
   }
   connections: {
     list(): Promise<ConnectionStatus[]>
+    /** Reexecuta a detecção real (binário/versão/auth do Codex). */
+    refresh(): Promise<ConnectionStatus[]>
   }
 }

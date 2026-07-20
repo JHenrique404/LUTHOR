@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Agent } from '@shared/domain'
 import { RUN_STATE_LABELS, verifiedProgress } from '@shared/domain'
 import { isTerminal } from '@shared/state-machine/run-state'
@@ -33,6 +33,7 @@ export function AgentOfficePage(): React.JSX.Element {
     lastEvent,
     pauseAll,
     resumeAll,
+    cancelRun,
     pauseAgent,
     resumeAgent,
     answerQuestions,
@@ -44,6 +45,17 @@ export function AgentOfficePage(): React.JSX.Element {
   const [decisionBoxOpen, setDecisionBoxOpen] = useState(false)
   const [decisionInitialId, setDecisionInitialId] = useState<string | null>(null)
   const [composer, setComposer] = useState<ComposerState | null>(null)
+  const [codexAvailability, setCodexAvailability] = useState<{ ok: boolean; reason?: string }>({
+    ok: false,
+    reason: 'verificando a CLI do Codex…'
+  })
+
+  useEffect(() => {
+    void window.luthor?.connections.list().then((list) => {
+      const codex = list.find((c) => c.id === 'codex')
+      if (codex) setCodexAvailability({ ok: codex.status === 'configured', reason: codex.detail })
+    })
+  }, [])
 
   if (!snapshot) {
     return (
@@ -64,7 +76,9 @@ export function AgentOfficePage(): React.JSX.Element {
 
   const paused = snapshot.run.state === 'paused'
   const terminal = isTerminal(snapshot.run.state)
-  const directable = DIRECTABLE_RUN_STATES.includes(snapshot.run.state)
+  const realRun = snapshot.run.executor === 'codex_cli'
+  const cancelling = snapshot.run.cancelRequested && !terminal
+  const directable = !realRun && DIRECTABLE_RUN_STATES.includes(snapshot.run.state)
   const runStyle = RUN_STATE_STYLE[snapshot.run.state]
   const pendingQuestions = snapshot.questions.filter((q) => q.status === 'pending')
   const progress = verifiedProgress(snapshot.steps)
@@ -82,7 +96,12 @@ export function AgentOfficePage(): React.JSX.Element {
           <p className="text-xs text-ink-faint">
             workspace ativo: <span className="text-exec">{snapshot.workspace.name}</span> · run{' '}
             <span className="font-logs">{snapshot.run.id}</span> ·{' '}
-            <span className="text-warn">agentes simulados</span> · Fase 2A: um run por vez
+            {realRun ? (
+              <span className="font-pixel text-exec">EXECUTOR REAL · CODEX CLI</span>
+            ) : (
+              <span className="text-warn">agentes simulados</span>
+            )}{' '}
+            · um run por vez
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -105,7 +124,18 @@ export function AgentOfficePage(): React.JSX.Element {
               Direcionar run
             </PixelButton>
           )}
-          {!terminal && (
+          {/* Run REAL: a CLI não suporta pausa — só cancelamento gracioso. */}
+          {!terminal && realRun && (
+            <PixelButton
+              variant="danger"
+              disabled={cancelling}
+              onClick={() => void cancelRun()}
+              title="Interrompe graciosamente; força o encerramento após 5s"
+            >
+              {cancelling ? 'Cancelando…' : 'Cancelar run'}
+            </PixelButton>
+          )}
+          {!terminal && !realRun && (
             <PixelButton
               variant={paused ? 'primary' : 'danger'}
               onClick={() => void (paused ? resumeAll() : pauseAll())}
@@ -213,6 +243,7 @@ export function AgentOfficePage(): React.JSX.Element {
           kind={composer.kind}
           agents={snapshot.agents}
           continuedFromRunId={composer.continuedFromRunId}
+          codexAvailability={codexAvailability}
           onClose={() => setComposer(null)}
           onSubmitNewTask={(input) => void startNewTask(input)}
           onSubmitInstruction={(input) => void addUserDirection(input)}

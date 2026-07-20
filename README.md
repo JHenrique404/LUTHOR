@@ -4,13 +4,35 @@ Central de comando local (desktop, Windows) para orquestrar projetos e agentes d
 Você abre um workspace, envia uma tarefa para um orquestrador pai e acompanha os agentes
 delegados (Frontend, Backend, Pesquisador, Verificador) em uma "Agent Office" pixel-art.
 
-> **Fase 2A — workspaces locais reais e persistentes (concluída).**
-> Workspaces agora são **reais**: cadastrados via diálogo nativo, validados no
-> processo main e persistidos em disco com migrações. Agentes, eventos, logs,
-> progresso e conexões continuam **simulados** (Fase 1 preservada como protótipo).
-> Nesta fase, LUTHOR apenas organiza e registra workspaces; **nenhum arquivo do
-> projeto do usuário é alterado**. A Fase 2B trará o primeiro executor real de um
-> único provedor.
+> **Fase 2B — primeiro executor REAL via Codex CLI (concluída).**
+> "Nova tarefa" agora oferece o modo **Executor Codex (real)**: um único processo
+> `codex exec` por vez, rodando com `cwd` no workspace ativo validado, sandbox
+> `workspace-write`, logs JSONL estruturados, cancelamento gracioso e transcript
+> local. A CLI é **detectada** (binário/versão/auth) — nada é assumido; sem login
+> automático e sem tokens armazenados. A simulação da Fase 1 permanece como modo
+> padrão e fallback visual.
+
+## Executor real — Codex CLI (Fase 2B)
+
+- **Detecção honesta** (`src/main/services/codex/codex-detector.ts`): `codex
+  --version`, capacidades via `codex exec --help` (`--json`, `--sandbox`,
+  `--cd`, `--skip-git-repo-check`) e auth via `codex login status`. Se não
+  autenticado, a tela Conexões instrui `codex login` no SEU terminal.
+- **Processo isolado** (`codex-runner.ts`): spawn sem shell, `cwd` = caminho
+  canônico do workspace ativo, `--sandbox workspace-write` (trabalho só dentro
+  do workspace; nunca `danger-full-access` nem bypass de aprovações).
+- **Sem dados inventados**: modelo aparece só se a CLI informar nos eventos
+  JSONL; não há steps, porcentagens, tokens nem custo fabricados.
+- **Git só leitura antes do run**: `rev-parse` + `status --porcelain` para
+  avisar sobre mudanças pré-existentes (registradas no metadata). Nenhuma
+  escrita Git.
+- **Cancelamento real**: sem pausa fingida — "Cancelar run" interrompe
+  graciosamente e força (`taskkill /T`) só após 5s. "Sair do LUTHOR" com run
+  real ativo pergunta: cancelar e sair, ou manter aberto.
+- **Transcript local** em `userData/runs/<runId>/` (JSONL limitado a 2 MB +
+  metadata.json), sem variáveis de ambiente, tokens ou segredos.
+- **X da janela** continua só ocultando para a bandeja; o processo real segue
+  rodando oculto.
 
 ## Stack
 
@@ -207,12 +229,12 @@ Roadmap: preferência configurável nas Configurações para escolher entre
 - **Fase 2A — workspaces locais reais e persistentes**: ✅ concluída (registro
   persistente com migrações, validação de caminho no main, workspace ativo,
   bloqueio de troca com run ativo, telas de central e detalhe).
-- **Fase 2B — primeiro executor real de um único provedor**: próxima. Um agente
-  real (um provedor só) executando uma tarefa em um workspace, com terminal e
-  eventos reais substituindo a fonte simulada — IPC, snapshot e renderer
-  permanecem os mesmos.
-- **Fases futuras**: múltiplos provedores, concorrência entre workspaces/runs
-  paralelos, worktrees Git reais, detecção de projeto (leitura opt-in), OAuth e
+- **Fase 2B — primeiro executor real (Codex CLI)**: ✅ concluída. Um único
+  processo real por vez, sandboxed no workspace ativo, com detecção de CLI,
+  logs estruturados, cancelamento gracioso e transcript local — mesma IPC,
+  mesmo snapshot, mesmo renderer.
+- **Fases futuras**: Claude Code, orquestrador real/delegação, múltiplos
+  agentes e workspaces em paralelo, worktrees Git reais, diff visual, OAuth e
   modelos locais.
 
 ## Direção visual

@@ -136,7 +136,15 @@ export function createStandardRunParts(runId: string, title: string, now: number
       prompt: title,
       createdAt: now
     },
-    run: { id: runId, taskId: `task-${runId}`, state: 'running', startedAt: now, updatedAt: now },
+    run: {
+      id: runId,
+      taskId: `task-${runId}`,
+      state: 'running',
+      executor: 'simulated',
+      cancelRequested: false,
+      startedAt: now,
+      updatedAt: now
+    },
     steps: stepTitles.map((stepTitle, i) => ({
       id: `${runId}-step-${i + 1}`,
       runId,
@@ -191,7 +199,15 @@ export function createSquadRunParts(runId: string, title: string, now: number): 
       prompt: title,
       createdAt: now
     },
-    run: { id: runId, taskId: `task-${runId}`, state: 'running', startedAt: now, updatedAt: now },
+    run: {
+      id: runId,
+      taskId: `task-${runId}`,
+      state: 'running',
+      executor: 'simulated',
+      cancelRequested: false,
+      startedAt: now,
+      updatedAt: now
+    },
     steps: bugs.map((bug, i) => ({
       id: `${runId}-step-${i + 1}`,
       runId,
@@ -250,6 +266,8 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
       id: runId,
       taskId: 'task-auth',
       state: 'running',
+      executor: 'simulated',
+      cancelRequested: false,
       startedAt: now - 40 * MIN,
       updatedAt: now
     },
