@@ -1,11 +1,13 @@
 import { useEffect } from 'react'
 import { HashRouter, NavLink, Route, Routes } from 'react-router-dom'
 import { useRunStore } from '@renderer/stores/run-store'
+import { useWorkspaceStore } from '@renderer/stores/workspace-store'
 import { HomePage } from '@renderer/pages/HomePage'
 import { AgentOfficePage } from '@renderer/pages/AgentOfficePage'
 import { RunDetailPage } from '@renderer/pages/RunDetailPage'
 import { ConnectionsPage } from '@renderer/pages/ConnectionsPage'
 import { SettingsPage } from '@renderer/pages/SettingsPage'
+import { WorkspaceDetailPage } from '@renderer/pages/WorkspaceDetailPage'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Início' },
@@ -17,10 +19,16 @@ const NAV_ITEMS = [
 
 export function App(): React.JSX.Element {
   const init = useRunStore((s) => s.init)
+  const initWorkspaces = useWorkspaceStore((s) => s.init)
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
+  const activeWorkspace = useWorkspaceStore((s) =>
+    s.workspaces.find((ws) => ws.id === activeWorkspaceId)
+  )
 
   useEffect(() => {
     void init()
-  }, [init])
+    void initWorkspaces()
+  }, [init, initWorkspaces])
 
   return (
     <HashRouter>
@@ -30,8 +38,13 @@ export function App(): React.JSX.Element {
         <div className="titlebar-drag flex h-9 shrink-0 items-center gap-3 border-b-2 border-night-700 bg-night-950 px-3">
           <span className="font-pixel text-cyan-glow text-[11px] tracking-widest">LUTHOR</span>
           <span className="font-pixel text-[8px] uppercase text-ink-faint">
-            central de agentes · simulação
+            central de agentes
           </span>
+          {activeWorkspace && (
+            <span className="font-pixel text-[8px] uppercase text-exec" title={activeWorkspace.path}>
+              ▸ {activeWorkspace.name}
+            </span>
+          )}
         </div>
 
         {/* overflow-hidden no shell: sidebar ocupa a altura toda; só o main rola. */}
@@ -43,7 +56,7 @@ export function App(): React.JSX.Element {
           <div className="mb-4 px-2">
             <span className="font-pixel text-cyan-glow text-sm tracking-widest">LUTHOR</span>
             <span className="font-pixel mt-1 block text-[8px] uppercase text-warn">
-              fase 1 · simulado
+              fase 2a · agentes simulados
             </span>
           </div>
           {NAV_ITEMS.map((item) => (
@@ -67,6 +80,7 @@ export function App(): React.JSX.Element {
         <main className="h-full min-w-0 flex-1 overflow-y-auto bg-night-900">
           <Routes>
             <Route path="/" element={<HomePage />} />
+            <Route path="/workspace/:workspaceId" element={<WorkspaceDetailPage />} />
             <Route path="/office" element={<AgentOfficePage />} />
             <Route path="/run" element={<RunDetailPage />} />
             <Route path="/connections" element={<ConnectionsPage />} />

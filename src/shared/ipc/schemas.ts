@@ -10,6 +10,9 @@ import { EffortSchema, ProviderKindSchema } from '../domain/schemas'
 /** pauseAgent / resumeAgent */
 export const AgentIdSchema = z.string().min(1).max(128)
 
+/** setActive / remove de workspaces. */
+export const WorkspaceIdSchema = z.string().min(1).max(128)
+
 export const AnswerQuestionInputSchema = z
   .object({
     questionId: z.string().min(1).max(128),

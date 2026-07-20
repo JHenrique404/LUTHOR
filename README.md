@@ -4,10 +4,13 @@ Central de comando local (desktop, Windows) para orquestrar projetos e agentes d
 Você abre um workspace, envia uma tarefa para um orquestrador pai e acompanha os agentes
 delegados (Frontend, Backend, Pesquisador, Verificador) em uma "Agent Office" pixel-art.
 
-> **Fase 1 — fundação arquitetural e protótipo funcional.**
-> Tudo o que se move na interface (agentes, eventos, logs, progresso, conexões) é
-> **simulado**. Nenhuma integração real existe ainda — apenas contratos e pontos de
-> extensão claros para a Fase 2.
+> **Fase 2A — workspaces locais reais e persistentes (concluída).**
+> Workspaces agora são **reais**: cadastrados via diálogo nativo, validados no
+> processo main e persistidos em disco com migrações. Agentes, eventos, logs,
+> progresso e conexões continuam **simulados** (Fase 1 preservada como protótipo).
+> Nesta fase, LUTHOR apenas organiza e registra workspaces; **nenhum arquivo do
+> projeto do usuário é alterado**. A Fase 2B trará o primeiro executor real de um
+> único provedor.
 
 ## Stack
 
@@ -34,6 +37,13 @@ delegados (Frontend, Backend, Pesquisador, Verificador) em uma "Agent Office" pi
   (`connect-src ws: http://localhost:*` + inline script do react-refresh); em
   prod/build empacotado, política restritiva sem `ws:`, sem `localhost` e sem
   scripts inline (`script-src 'self'; connect-src 'self'; object-src 'none'`).
+- **Workspaces validados no main** (`src/main/services/workspaces/`): o renderer
+  nunca envia caminhos livres nem acessa filesystem — a única origem de um caminho
+  é o diálogo nativo, e mesmo esse resultado é validado no main (absoluto,
+  existente, diretório, canonicalizado via `realpath`, deduplicado por chave de
+  caminho case-insensitive no Windows). Nenhuma leitura ampla do disco: apenas
+  `stat`/`realpath` da pasta escolhida; nada dentro do workspace é lido, inspecionado
+  ou executado (nem Git).
 
 ## Como executar
 
@@ -60,8 +70,12 @@ Scripts disponíveis:
 │  index.ts (BrowserWindow seguro)                                    │
 │  ipc/register.ts ............. handlers (invoke) por domínio        │
 │  services/db/ ................ Repository (contrato) +              │
-│                                InMemoryRepository (seeds) +         │
-│                                schema.sql (SQLite p/ Fase 2)        │
+│                                InMemoryRepository (run demo/perfis) │
+│                                + schema.sql (SQLite futuro)         │
+│  services/workspaces/ ........ Fase 2A: registro REAL e persistente │
+│                                (JSON versionado + migrações),       │
+│                                validação de caminho e política de   │
+│                                workspace ativo                      │
 │  services/simulation/ ........ SimulationEngine (eventos mockados)  │
 │  services/integrations/ ...... SÓ CONTRATOS: AgentProvider,         │
 │                                WorktreeStrategy (stubs simulados)   │
@@ -104,16 +118,35 @@ preload e re-renderiza a partir do snapshot completo. Comandos do usuário
   estratégia de worktrees Git. Regra já validada (`validateWriterIsolation`):
   dois agentes `writer` jamais compartilham a mesma working copy.
 
-## O que é mockado nesta fase
+## Workspaces reais (Fase 2A)
 
-| Área                        | Estado na Fase 1                                             | Ponto de extensão                                   |
+- **Home = central de workspaces**: cadastrar ("Abrir workspace" via diálogo
+  nativo), ativar, remover registro e navegar para o detalhe de cada workspace.
+  Projetos reais (`origin: user`) e exemplos demonstrativos (`origin: demo`,
+  removíveis) ficam em seções separadas — nunca se misturam.
+- **Persistência com migrações**: `workspaces.json` versionado em `userData`
+  (gravação atômica via arquivo temporário + rename; arquivo corrompido vira
+  backup `.corrupt-*` e o registro recomeça com seeds). Migração v0→v1 cobre o
+  formato da Fase 1. Persistidos: nome, caminho, origem, data de cadastro,
+  última abertura e workspace ativo.
+- **Um workspace ativo, um run por vez**: o ativo aparece na barra de título,
+  na Home e no Agent Office. Com run simulado ativo, a troca/remoção do
+  workspace ativo é **bloqueada** com aviso na UI (concorrência entre
+  workspaces é fase futura) — dá para aguardar concluir ou cancelar o run.
+- **Detalhe do workspace** (`/workspace/:id`): nome, caminho, datas, origem e o
+  estado "pronto para agentes na Fase 2B", com o aviso de que nesta fase nenhum
+  arquivo do projeto é alterado.
+
+## O que segue mockado nesta fase
+
+| Área                        | Estado na Fase 2A                                            | Ponto de extensão                                   |
 | --------------------------- | ------------------------------------------------------------ | --------------------------------------------------- |
 | Eventos/logs/agentes        | `SimulationEngine` roteiriza o run demo                      | `src/main/services/simulation/`                     |
 | Claude Code / Codex / Node  | Cards "não configurado", sem CLI, sem chaves, sem detecção   | `AgentProvider` em `services/integrations/`         |
 | Worktrees Git               | Refs fictícios; regra de isolamento validada em memória      | `WorktreeStrategy` em `services/integrations/`      |
-| Persistência                | `InMemoryRepository` com seeds                               | Interface `Repository` + `schema.sql` (SQLite)      |
-| Abrir workspace             | Só seleciona e registra a pasta (nada é lido ou executado)   | handler em `src/main/ipc/register.ts`               |
-| Terminal / Ollama / OAuth   | Não existem                                                  | Fase 2                                              |
+| Run demo + perfis           | `InMemoryRepository` com seeds (descartados ao fechar)       | Interface `Repository` + `schema.sql` (SQLite)      |
+| Conteúdo do workspace       | Nada é lido, inspecionado ou executado (nem Git)             | Fase 2B                                             |
+| Terminal / Ollama / OAuth   | Não existem                                                  | Fase 2B+                                            |
 
 ### Interações da Agent Office
 
@@ -166,6 +199,21 @@ O LUTHOR agora vive na bandeja do Windows, ao lado do relógio:
 
 Roadmap: preferência configurável nas Configurações para escolher entre
 "minimizar para a bandeja" e "encerrar ao clicar no X".
+
+## Roadmap
+
+- **Fase 1 — protótipo visual/simulado**: ✅ concluída e congelada (identidade
+  LUTHOR Pixel UI, segurança Electron, bandeja, simulação e testes preservados).
+- **Fase 2A — workspaces locais reais e persistentes**: ✅ concluída (registro
+  persistente com migrações, validação de caminho no main, workspace ativo,
+  bloqueio de troca com run ativo, telas de central e detalhe).
+- **Fase 2B — primeiro executor real de um único provedor**: próxima. Um agente
+  real (um provedor só) executando uma tarefa em um workspace, com terminal e
+  eventos reais substituindo a fonte simulada — IPC, snapshot e renderer
+  permanecem os mesmos.
+- **Fases futuras**: múltiplos provedores, concorrência entre workspaces/runs
+  paralelos, worktrees Git reais, detecção de projeto (leitura opt-in), OAuth e
+  modelos locais.
 
 ## Direção visual
 

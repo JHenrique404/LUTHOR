@@ -9,12 +9,14 @@ import {
   NewTaskInputSchema,
   ProfileIdSchema,
   UpdateProfileInputSchema,
-  UserDirectionInputSchema
+  UserDirectionInputSchema,
+  WorkspaceIdSchema
 } from '@shared/ipc/schemas'
 import type { AgentProfile } from '@shared/domain'
 import type { Repository } from '../services/db/repository'
 import type { SimulationEngine } from '../services/simulation/simulation-engine'
 import type { AgentProvider } from '../services/integrations/agent-provider'
+import type { WorkspaceService } from '../services/workspaces/workspace-service'
 
 /**
  * O main não confia nos tipos do preload/renderer: todo payload IPC
@@ -32,27 +34,39 @@ function parseIpc<T>(schema: ZodType<T>, value: unknown, channel: string): T {
 export function registerIpcHandlers(
   repository: Repository,
   engine: SimulationEngine,
-  providers: AgentProvider[]
+  providers: AgentProvider[],
+  workspaces: WorkspaceService
 ): void {
-  ipcMain.handle(IpcChannels.workspaceList, () => repository.listWorkspaces())
+  ipcMain.handle(IpcChannels.workspaceState, () => workspaces.state())
 
-  // "Abrir workspace" apenas seleciona e registra uma pasta.
-  // Não inicializa Git, não inspeciona nem executa nada dentro dela.
+  // "Abrir workspace" seleciona uma pasta no diálogo NATIVO; o caminho é
+  // validado e registrado no main (WorkspaceService). Não inicializa Git,
+  // não inspeciona nem executa nada dentro da pasta.
   ipcMain.handle(IpcChannels.workspaceOpenDialog, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Abrir workspace',
+      buttonLabel: 'Usar esta pasta',
+      properties: ['openDirectory' as const]
+    }
     const result = win
-      ? await dialog.showOpenDialog(win, {
-          title: 'Abrir workspace',
-          properties: ['openDirectory']
-        })
-      : await dialog.showOpenDialog({ title: 'Abrir workspace', properties: ['openDirectory'] })
-    if (result.canceled || result.filePaths.length === 0) return null
-    return repository.registerWorkspace(result.filePaths[0])
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return { status: 'cancelled' }
+    return workspaces.openPath(result.filePaths[0])
   })
+
+  ipcMain.handle(IpcChannels.workspaceSetActive, (_e, workspaceId: unknown) =>
+    workspaces.setActive(parseIpc(WorkspaceIdSchema, workspaceId, IpcChannels.workspaceSetActive))
+  )
+  ipcMain.handle(IpcChannels.workspaceRemove, (_e, workspaceId: unknown) =>
+    workspaces.remove(parseIpc(WorkspaceIdSchema, workspaceId, IpcChannels.workspaceRemove))
+  )
 
   ipcMain.handle(IpcChannels.runSnapshot, () => engine.getSnapshot())
   ipcMain.handle(IpcChannels.simPauseAll, () => engine.pauseAll())
   ipcMain.handle(IpcChannels.simResumeAll, () => engine.resumeAll())
+  ipcMain.handle(IpcChannels.simCancelRun, () => engine.cancelRun())
 
   ipcMain.handle(IpcChannels.simPauseAgent, (_e, agentId: unknown) =>
     engine.pauseAgent(parseIpc(AgentIdSchema, agentId, IpcChannels.simPauseAgent))

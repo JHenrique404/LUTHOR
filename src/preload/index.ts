@@ -17,8 +17,11 @@ import type {
  */
 const api: LuthorApi = {
   workspaces: {
-    list: () => ipcRenderer.invoke(IpcChannels.workspaceList),
-    openDialog: () => ipcRenderer.invoke(IpcChannels.workspaceOpenDialog)
+    state: () => ipcRenderer.invoke(IpcChannels.workspaceState),
+    openDialog: () => ipcRenderer.invoke(IpcChannels.workspaceOpenDialog),
+    setActive: (workspaceId: string) =>
+      ipcRenderer.invoke(IpcChannels.workspaceSetActive, workspaceId),
+    remove: (workspaceId: string) => ipcRenderer.invoke(IpcChannels.workspaceRemove, workspaceId)
   },
   run: {
     snapshot: () => ipcRenderer.invoke(IpcChannels.runSnapshot)
@@ -26,6 +29,7 @@ const api: LuthorApi = {
   sim: {
     pauseAll: () => ipcRenderer.invoke(IpcChannels.simPauseAll),
     resumeAll: () => ipcRenderer.invoke(IpcChannels.simResumeAll),
+    cancelRun: () => ipcRenderer.invoke(IpcChannels.simCancelRun),
     pauseAgent: (agentId: string) => ipcRenderer.invoke(IpcChannels.simPauseAgent, agentId),
     resumeAgent: (agentId: string) => ipcRenderer.invoke(IpcChannels.simResumeAgent, agentId),
     answerQuestion: (input: AnswerQuestionInput) =>

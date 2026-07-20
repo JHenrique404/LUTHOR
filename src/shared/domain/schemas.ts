@@ -58,10 +58,20 @@ export type StepStatus = z.infer<typeof StepStatusSchema>
 export const WriteScopeSchema = z.enum(['read_only', 'writer'])
 export type WriteScope = z.infer<typeof WriteScopeSchema>
 
+/**
+ * `demo` = dado de exemplo seedado (pasta pode nem existir; removível a
+ * qualquer momento). `user` = pasta real escolhida pelo usuário via diálogo
+ * nativo e validada no processo main. Os dois nunca se misturam na UI.
+ */
+export const WorkspaceOriginSchema = z.enum(['demo', 'user'])
+export type WorkspaceOrigin = z.infer<typeof WorkspaceOriginSchema>
+
 export const WorkspaceSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
   path: z.string().min(1),
+  origin: WorkspaceOriginSchema,
+  createdAt: z.number(),
   lastOpenedAt: z.number()
 })
 export type Workspace = z.infer<typeof WorkspaceSchema>

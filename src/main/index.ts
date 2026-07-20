@@ -2,7 +2,10 @@ import { join } from 'node:path'
 import { app, BrowserWindow, Menu, Notification, shell, Tray } from 'electron'
 import { IpcChannels } from '@shared/ipc/contract'
 import { createRepository } from './services/db/in-memory-repository'
+import { createSeedWorkspaces } from './services/db/seed'
 import { createProviders } from './services/integrations/agent-provider'
+import { JsonWorkspaceRegistry } from './services/workspaces/workspace-registry'
+import { WorkspaceService } from './services/workspaces/workspace-service'
 import { SimulationEngine } from './services/simulation/simulation-engine'
 import { registerIpcHandlers } from './ipc/register'
 import { WindowLifecycle } from './lifecycle/window-lifecycle'
@@ -17,6 +20,13 @@ async function bootstrap(): Promise<void> {
   const providers = createProviders()
   const seedSnapshot = await repository.getRunSnapshot()
 
+  // Registro PERSISTENTE de workspaces (Fase 2A): JSON versionado com
+  // migrações em userData. Seeds demo só na primeira execução.
+  const workspaceRegistry = await JsonWorkspaceRegistry.open({
+    dir: app.getPath('userData'),
+    seed: () => createSeedWorkspaces()
+  })
+
   let mainWindow: BrowserWindow | null = null
   let tray: Tray | null = null
   let updateTrayMenu: () => void = () => {}
@@ -30,6 +40,16 @@ async function bootstrap(): Promise<void> {
       // Estado do run muda -> menu da bandeja acompanha (Pausar/Retomar).
       updateTrayMenu()
     }
+  })
+
+  // O run demo abre apontando para o workspace ativo persistido.
+  const activeWorkspace = workspaceRegistry.getActive()
+  if (activeWorkspace) engine.setWorkspace(activeWorkspace)
+
+  const workspaceService = new WorkspaceService({
+    registry: workspaceRegistry,
+    isRunBusy: () => engine.isBusy(),
+    onActiveChanged: (workspace) => engine.setWorkspace(workspace)
   })
 
   const lifecycle = new WindowLifecycle({
@@ -51,7 +71,7 @@ async function bootstrap(): Promise<void> {
     }
   })
 
-  registerIpcHandlers(repository, engine, providers)
+  registerIpcHandlers(repository, engine, providers, workspaceService)
 
   mainWindow = new BrowserWindow({
     width: 1360,

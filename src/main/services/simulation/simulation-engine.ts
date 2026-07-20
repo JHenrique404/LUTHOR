@@ -5,9 +5,10 @@ import type {
   RunEvent,
   RunEventType,
   RunSnapshot,
-  RunState
+  RunState,
+  Workspace
 } from '@shared/domain'
-import { assertTransition } from '@shared/state-machine/run-state'
+import { assertTransition, isTerminal } from '@shared/state-machine/run-state'
 import type {
   AnswerQuestionInput,
   NewTaskInput,
@@ -112,6 +113,20 @@ export class SimulationEngine {
     return this.snapshot.run.state
   }
 
+  /** true = run em estado não terminal (bloqueia troca destrutiva de workspace). */
+  isBusy(): boolean {
+    return !isTerminal(this.snapshot.run.state)
+  }
+
+  /**
+   * Workspace ativo mudou (Fase 2A): o snapshot passa a apontar para ele.
+   * Só é permitido com run terminal — a política é aplicada no WorkspaceService.
+   */
+  setWorkspace(workspace: Workspace): void {
+    this.snapshot.workspace = structuredClone(workspace)
+    this.snapshot.task.workspaceId = workspace.id
+  }
+
   start(): void {
     this.schedule()
   }
@@ -174,6 +189,24 @@ export class SimulationEngine {
     return this.getSnapshot()
   }
 
+  /**
+   * Cancela o run simulado ativo (Fase 2A): transição validada para
+   * `cancelled`, timers parados. Usado para liberar a troca de workspace
+   * sem descartar silenciosamente um run em andamento.
+   */
+  cancelRun(): RunSnapshot {
+    if (!this.isBusy()) return this.getSnapshot()
+    this.stop()
+    const { run } = this.snapshot
+    run.state = assertTransition(run.state, 'cancelled')
+    this.pausedAll = false
+    this.pausedByAll.clear()
+    this.pausedIndividually.clear()
+    this.phase = 'done'
+    this.pushEvent('run_state_changed', null, 'Run cancelado pelo usuário — nenhum evento novo será emitido')
+    return this.getSnapshot()
+  }
+
   answerQuestion(input: AnswerQuestionInput): RunSnapshot {
     this.applyAnswer(input)
     return this.getSnapshot()
@@ -229,6 +262,8 @@ export class SimulationEngine {
       input.mode === 'squad_demo'
         ? createSquadRunParts(runId, title, now)
         : createStandardRunParts(runId, title, now)
+    // O novo run pertence ao workspace ATIVO, não ao demo hardcoded do seed.
+    parts.task.workspaceId = this.snapshot.workspace.id
 
     this.snapshot = {
       workspace: this.snapshot.workspace,

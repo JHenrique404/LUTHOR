@@ -80,9 +80,9 @@ export function AgentOfficePage(): React.JSX.Element {
         <div>
           <h1 className="font-pixel text-cyan-glow text-lg tracking-widest">AGENT OFFICE</h1>
           <p className="text-xs text-ink-faint">
-            workspace ativo: <span className="text-ink-dim">{snapshot.workspace.name}</span> · run{' '}
+            workspace ativo: <span className="text-exec">{snapshot.workspace.name}</span> · run{' '}
             <span className="font-logs">{snapshot.run.id}</span> ·{' '}
-            <span className="text-warn">dados simulados</span> · Fase 1: um run por vez
+            <span className="text-warn">agentes simulados</span> · Fase 2A: um run por vez
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

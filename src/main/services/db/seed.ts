@@ -48,24 +48,34 @@ export function createSeedProfiles(): AgentProfile[] {
   ]
 }
 
+/**
+ * Workspaces DEMONSTRATIVOS (origin: 'demo') — pastas fictícias, nunca lidas.
+ * Ficam separados dos projetos reais do usuário na UI e podem ser removidos.
+ */
 export function createSeedWorkspaces(now = Date.now()): Workspace[] {
   return [
     {
       id: 'ws-meu-saas',
       name: 'meu-saas',
       path: 'C:\\dev\\meu-saas',
+      origin: 'demo',
+      createdAt: now - 40 * 24 * 60 * MIN,
       lastOpenedAt: now - 8 * MIN
     },
     {
       id: 'ws-site-portfolio',
       name: 'site-portfolio',
       path: 'C:\\dev\\site-portfolio',
+      origin: 'demo',
+      createdAt: now - 60 * 24 * 60 * MIN,
       lastOpenedAt: now - 26 * 60 * MIN
     },
     {
       id: 'ws-cli-tools',
       name: 'cli-tools',
       path: 'C:\\dev\\cli-tools',
+      origin: 'demo',
+      createdAt: now - 90 * 24 * 60 * MIN,
       lastOpenedAt: now - 3 * 24 * 60 * MIN
     }
   ]

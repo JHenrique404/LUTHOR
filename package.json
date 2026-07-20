@@ -1,7 +1,7 @@
 {
   "name": "luthor",
   "version": "0.1.0",
-  "description": "LUTHOR — central de comando local para workspaces e agentes de IA (Fase 1: protótipo com dados simulados)",
+  "description": "LUTHOR — central de comando local para workspaces e agentes de IA (Fase 2A: workspaces reais persistentes; agentes ainda simulados)",
   "main": "./out/main/index.js",
   "license": "MIT",
   "private": true,

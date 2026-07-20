@@ -10,8 +10,12 @@ interface RunStoreState {
   bridgeAvailable: boolean
   initialized: boolean
   init: () => Promise<void>
+  /** Re-busca o snapshot (ex.: após troca de workspace ativo). */
+  refreshSnapshot: () => Promise<void>
   pauseAll: () => Promise<void>
   resumeAll: () => Promise<void>
+  /** Cancela o run simulado ativo (libera a troca de workspace). */
+  cancelRun: () => Promise<void>
   pauseAgent: (agentId: string) => Promise<void>
   resumeAgent: (agentId: string) => Promise<void>
   answerQuestion: (input: AnswerQuestionInput) => Promise<void>
@@ -49,10 +53,22 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
     set({ snapshot })
   },
 
+  refreshSnapshot: async () => {
+    const api = window.luthor
+    if (!api) return
+    set({ snapshot: await api.run.snapshot() })
+  },
+
   pauseAll: async () => {
     const api = window.luthor
     if (!api) return
     set({ snapshot: await api.sim.pauseAll() })
+  },
+
+  cancelRun: async () => {
+    const api = window.luthor
+    if (!api) return
+    set({ snapshot: await api.sim.cancelRun() })
   },
 
   resumeAll: async () => {
