@@ -62,6 +62,12 @@ export interface StartOptions {
   prompt: string
   /** Caminho CANÔNICO do workspace ativo (validado pela Fase 2A). */
   cwd: string
+  /**
+   * Executável RESOLVIDO pelo CodexBinaryResolver (caminho absoluto do
+   * codex.exe real, ou nome simples fora do Windows). O runner nunca volta
+   * a usar a string "codex" quando a detecção achou o caminho completo.
+   */
+  binaryPath?: string
   capabilities: CodexCapabilities
   /** false = pasta sem repositório Git (usa --skip-git-repo-check). */
   isGitRepo: boolean
@@ -108,7 +114,7 @@ export class CodexRunner {
     if (this.child) throw new Error('Já existe um processo Codex em execução')
     this.cancelRequested = false
     const args = this.buildArgs(options)
-    const child = this.spawnFn(this.binary, args, options.cwd)
+    const child = this.spawnFn(options.binaryPath ?? this.binary, args, options.cwd)
     this.child = child
 
     options.onEvent({ kind: 'started', pid: child.pid ?? null, args })

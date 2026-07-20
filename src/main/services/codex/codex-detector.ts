@@ -45,6 +45,22 @@ export interface CodexStatus {
   capabilities: CodexCapabilities | null
   /** Mensagem resumida para a UI. */
   detail: string
+  /**
+   * Caminho completo do executável resolvido — USO EXCLUSIVO do main
+   * (runner). O renderer recebe apenas binaryLabel (nome do arquivo).
+   */
+  binaryPath: string | null
+  /** Nome do executável (seguro para UI/logs). */
+  binaryLabel: string | null
+  binarySource: 'auto' | 'manual' | null
+  /** Classificação da falha de resolução, quando houver. */
+  failureCode:
+    | 'not_found'
+    | 'shim_only'
+    | 'not_executable'
+    | 'timeout'
+    | 'invalid_version'
+    | null
   checkedAt: number
 }
 
@@ -70,13 +86,48 @@ export const defaultCommandRunner: CommandRunner = (command, args, timeoutMs = 1
     })
   })
 
+/** Mensagens honestas por falha de resolução — sem stack trace, sem PATH. */
+const FAILURE_MESSAGES: Record<NonNullable<CodexStatus['failureCode']>, string> = {
+  not_found:
+    'Codex CLI não encontrado. Instale a CLI ou escolha o executável em Conexões.',
+  shim_only:
+    'Codex foi encontrado no terminal, mas apenas como atalho (shim do NVM/npm) que o LUTHOR não pode executar. Escolha o codex.exe real ou redetecte.',
+  not_executable:
+    'Codex foi encontrado, mas o executável não pôde ser iniciado pelo LUTHOR (EPERM/EACCES). Escolha o codex.exe real em Conexões.',
+  timeout: 'O executável do Codex não respondeu a tempo. Redetecte ou escolha outro executável.',
+  invalid_version:
+    'O executável encontrado respondeu de forma inesperada ao --version. Escolha o codex.exe real em Conexões.'
+}
+
+export interface CodexDetectorOptions {
+  runCommand?: CommandRunner
+  /** Resolvedor de binário; injetável nos testes. */
+  resolveBinary?: () => Promise<{
+    path: string | null
+    source: 'auto' | 'manual' | null
+    version: string | null
+    failure: CodexStatus['failureCode']
+    manualInvalid: boolean
+  }>
+}
+
 export class CodexDetector {
   private cached: CodexStatus | null = null
+  private readonly run: CommandRunner
+  private readonly resolveBinary: NonNullable<CodexDetectorOptions['resolveBinary']>
 
-  constructor(
-    private readonly run: CommandRunner = defaultCommandRunner,
-    private readonly binary = 'codex'
-  ) {}
+  constructor(options: CodexDetectorOptions = {}) {
+    this.run = options.runCommand ?? defaultCommandRunner
+    this.resolveBinary =
+      options.resolveBinary ??
+      (async () => ({
+        path: 'codex',
+        source: 'auto',
+        version: null,
+        failure: null,
+        manualInvalid: false
+      }))
+  }
 
   /** Última detecção (ou executa a primeira). */
   async status(): Promise<CodexStatus> {
@@ -87,31 +138,48 @@ export class CodexDetector {
   async refresh(): Promise<CodexStatus> {
     const checkedAt = Date.now()
 
-    let version: string | null = null
-    try {
-      const res = await this.run(this.binary, ['--version'])
-      if (res.code === 0) version = res.stdout.trim() || null
-    } catch {
-      version = null
-    }
-    if (!version) {
+    // 1. Resolver o executável REAL (nunca shims, nunca shell).
+    const resolved = await this.resolveBinary()
+    if (!resolved.path) {
+      const failureCode = resolved.failure ?? 'not_found'
+      const manualNote = resolved.manualInvalid
+        ? ' O caminho manual configurado é inválido e foi ignorado.'
+        : ''
       this.cached = {
         installed: false,
         version: null,
         authenticated: null,
         authDetail: null,
         capabilities: null,
-        detail:
-          'Codex CLI não encontrado no PATH. Instale a CLI do Codex e recarregue a detecção.',
+        detail: `${FAILURE_MESSAGES[failureCode]}${manualNote}`,
+        binaryPath: null,
+        binaryLabel: null,
+        binarySource: null,
+        failureCode,
         checkedAt
       }
       return this.cached
     }
 
+    const binary = resolved.path
+    const binaryLabel = binary.includes('\\') || binary.includes('/')
+      ? (binary.split(/[\\/]/).pop() ?? binary)
+      : binary
+
+    let version: string | null = resolved.version
+    if (!version) {
+      try {
+        const res = await this.run(binary, ['--version'])
+        if (res.code === 0) version = res.stdout.trim() || null
+      } catch {
+        version = null
+      }
+    }
+
     // Capacidades reais: parse do help de `exec` (nunca assumir flags).
     let capabilities: CodexCapabilities | null = null
     try {
-      const help = await this.run(this.binary, ['exec', '--help'])
+      const help = await this.run(binary, ['exec', '--help'])
       const text = `${help.stdout}\n${help.stderr}`
       capabilities = {
         jsonOutput: /--json\b/.test(text),
@@ -128,20 +196,21 @@ export class CodexDetector {
     let authenticated: boolean | null = null
     let authDetail: string | null = null
     try {
-      const auth = await this.run(this.binary, ['login', 'status'])
+      const auth = await this.run(binary, ['login', 'status'])
       authenticated = auth.code === 0
       authDetail = (auth.stdout || auth.stderr).trim().split('\n')[0] || null
     } catch {
       authenticated = null
     }
 
+    const sourceNote = resolved.source === 'manual' ? ' · executável manual' : ''
     const detail = !capabilities?.jsonOutput
-      ? `Detectado (${version}), mas sem suporte a --json em exec — executor indisponível nesta versão.`
+      ? `Detectado (${version ?? 'versão desconhecida'}), mas sem as capacidades necessárias (--json em exec) — executor indisponível nesta versão.`
       : authenticated === false
         ? `Detectado (${version}). Não autenticado: rode "codex login" uma vez no seu terminal.`
         : authenticated === null
           ? `Detectado (${version}). Não foi possível verificar a autenticação.`
-          : `Pronto (${version}).`
+          : `Pronto (${version})${sourceNote}.`
 
     this.cached = {
       installed: true,
@@ -150,6 +219,10 @@ export class CodexDetector {
       authDetail,
       capabilities,
       detail,
+      binaryPath: binary,
+      binaryLabel,
+      binarySource: resolved.source,
+      failureCode: null,
       checkedAt
     }
     return this.cached

@@ -8,6 +8,8 @@ import { JsonWorkspaceRegistry } from './services/workspaces/workspace-registry'
 import { WorkspaceService } from './services/workspaces/workspace-service'
 import { SimulationEngine } from './services/simulation/simulation-engine'
 import { CodexDetector } from './services/codex/codex-detector'
+import { CodexBinaryResolver } from './services/codex/codex-binary-resolver'
+import { CodexSettingsStore } from './services/codex/codex-settings-store'
 import { CodexRunManager } from './services/codex/codex-run-manager'
 import { RunCoordinator } from './services/run-coordinator'
 import { registerIpcHandlers } from './ipc/register'
@@ -21,8 +23,23 @@ app.setAppUserModelId('dev.luthor.app')
 async function bootstrap(): Promise<void> {
   const repository = createRepository()
   // Detecção real do Codex CLI (Fase 2B): leitura apenas; sem login automático.
-  const codexDetector = new CodexDetector()
-  void codexDetector.refresh().catch(() => {})
+  // O resolvedor encontra o codex.exe REAL (shims do NVM/npm não são executáveis
+  // pelo Electron); caminho manual persistido entra como fallback.
+  const codexSettings = new CodexSettingsStore(app.getPath('userData'))
+  const codexResolver = new CodexBinaryResolver({
+    getManualPath: () => codexSettings.getManualBinaryPath()
+  })
+  const codexDetector = new CodexDetector({
+    resolveBinary: () => codexResolver.resolve()
+  })
+  void codexDetector
+    .refresh()
+    .then((s) =>
+      console.log(
+        `[luthor] codex: ${s.detail}${s.binaryLabel ? ` · exec: ${s.binaryLabel} (${s.binarySource})` : ''}`
+      )
+    )
+    .catch(() => {})
   const providers = createProviders(codexDetector)
   const seedSnapshot = await repository.getRunSnapshot()
 
@@ -98,6 +115,9 @@ async function bootstrap(): Promise<void> {
     workspaces: workspaceService,
     refreshConnections: async () => {
       await codexDetector.refresh()
+    },
+    setManualCodexBinary: async (path) => {
+      await codexSettings.setManualBinaryPath(path)
     }
   })
 

@@ -49,6 +49,8 @@ export const IpcChannels = {
   profileDelete: 'luthor:profiles:delete',
   connectionsList: 'luthor:connections:list',
   connectionsRefresh: 'luthor:connections:refresh',
+  codexChooseBinary: 'luthor:codex:choose-binary',
+  codexClearBinary: 'luthor:codex:clear-binary',
   /** main -> renderer (webContents.send) */
   simEvent: 'luthor:sim:event'
 } as const
@@ -73,6 +75,12 @@ export interface ConnectionStatus {
   version?: string | null
   /** true/false quando a checagem de auth é suportada; null = não verificado. */
   authenticated?: boolean | null
+  /** Nome do executável resolvido (só o arquivo — nunca o PATH completo). */
+  binaryLabel?: string | null
+  /** 'manual' = caminho escolhido pelo usuário (fallback da detecção). */
+  binarySource?: 'auto' | 'manual' | null
+  /** Resumo das capacidades reais detectadas na CLI. */
+  capabilitiesSummary?: string[]
 }
 
 // ── Workspaces (Fase 2A: registro local real e persistente) ──────────────
@@ -161,5 +169,12 @@ export interface LuthorApi {
     list(): Promise<ConnectionStatus[]>
     /** Reexecuta a detecção real (binário/versão/auth do Codex). */
     refresh(): Promise<ConnectionStatus[]>
+    /**
+     * Fallback manual: dialog nativo para escolher o codex.exe (só .exe;
+     * validado no main). Usado apenas quando a detecção automática falha.
+     */
+    chooseCodexBinary(): Promise<ConnectionStatus[]>
+    /** Remove o caminho manual e volta à detecção automática. */
+    clearCodexBinary(): Promise<ConnectionStatus[]>
   }
 }

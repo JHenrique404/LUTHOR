@@ -9,6 +9,7 @@ import { ComposerModal } from '@renderer/components/office/ComposerModal'
 import { DecisionBox } from '@renderer/components/office/DecisionBox'
 import { SquadCard } from '@renderer/components/office/SquadCard'
 import { AgentOfficePage } from '@renderer/pages/AgentOfficePage'
+import { ConnectionsPage } from '@renderer/pages/ConnectionsPage'
 import { useRunStore } from '@renderer/stores/run-store'
 import { createSeedSnapshot, createSquadRunParts } from '../src/main/services/db/seed'
 
@@ -317,6 +318,76 @@ describe('Modal — responsividade', () => {
     const submit = screen.getByRole('button', { name: /enviar 0 resposta/i })
     expect(submit).toBeInTheDocument()
     expect(scrollArea.contains(submit)).toBe(false)
+  })
+})
+
+describe('ConnectionsPage — UX de Redetectar', () => {
+  const codexConn = {
+    id: 'codex' as const,
+    name: 'Codex',
+    status: 'configured' as const,
+    detail: 'Pronto (codex-cli 0.144.5).',
+    version: 'codex-cli 0.144.5',
+    authenticated: true,
+    binaryLabel: 'codex.exe',
+    binarySource: 'auto' as const,
+    capabilitiesSummary: ['exec --json', 'sandbox workspace-write']
+  }
+
+  afterEach(() => {
+    delete (window as { luthor?: unknown }).luthor
+  })
+
+  function stubLuthor(refresh: () => Promise<(typeof codexConn)[]>): void {
+    ;(window as { luthor?: unknown }).luthor = {
+      connections: {
+        list: async () => [codexConn],
+        refresh,
+        chooseCodexBinary: vi.fn(),
+        clearCodexBinary: vi.fn()
+      }
+    }
+  }
+
+  it('carregando: indicador pixel visível + aria-busy; sucesso: "Detecção atualizada agora"', async () => {
+    let release: (v: (typeof codexConn)[]) => void = () => {}
+    stubLuthor(() => new Promise((resolve) => (release = resolve)))
+    render(<ConnectionsPage />)
+    expect(await screen.findByText('codex-cli 0.144.5')).toBeInTheDocument()
+
+    const button = screen.getByRole('button', { name: 'Redetectar' })
+    await userEvent.click(button)
+
+    // Estado de carregamento visível, não só troca de texto.
+    expect(screen.getByTestId('connections-busy')).toBeInTheDocument()
+    expect(
+      screen.getByText('Verificando executável, versão e autenticação…')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Verificando…' })).toHaveAttribute(
+      'aria-busy',
+      'true'
+    )
+    expect(screen.getByRole('button', { name: 'Verificando…' })).toBeDisabled()
+
+    release([codexConn])
+    expect(await screen.findByText('Detecção atualizada agora.')).toBeInTheDocument()
+    // Versão, auth e capacidades continuam visíveis após atualizar.
+    expect(screen.getByText('codex-cli 0.144.5')).toBeInTheDocument()
+    expect(screen.getByText('autenticado')).toBeInTheDocument()
+    expect(screen.getByText(/sandbox workspace-write/)).toBeInTheDocument()
+  })
+
+  it('falha: aviso coral com a razão — nunca silencioso', async () => {
+    stubLuthor(async () => {
+      throw new Error('Codex foi encontrado no terminal, mas o atalho do NVM não pode ser executado')
+    })
+    render(<ConnectionsPage />)
+    await screen.findByText('codex-cli 0.144.5')
+    await userEvent.click(screen.getByRole('button', { name: 'Redetectar' }))
+
+    const feedback = await screen.findByTestId('connections-feedback')
+    expect(feedback.textContent).toMatch(/atalho do NVM/)
+    expect(feedback.className).toContain('text-alert')
   })
 })
 

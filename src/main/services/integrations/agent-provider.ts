@@ -38,6 +38,15 @@ export interface CodexStatusSource {
     version: string | null
     authenticated: boolean | null
     detail: string
+    binaryLabel: string | null
+    binarySource: 'auto' | 'manual' | null
+    capabilities: {
+      jsonOutput: boolean
+      sandboxWorkspaceWrite: boolean
+      cd: boolean
+      skipGitRepoCheck: boolean
+      colorNever: boolean
+    } | null
   }>
   refresh(): Promise<unknown>
 }
@@ -49,13 +58,26 @@ export class CodexCliProvider implements AgentProvider {
 
   async getStatus(): Promise<ConnectionStatus> {
     const s = await this.source.status()
+    const caps = s.capabilities
+    // Só o RESUMO das capacidades vai ao renderer — nunca PATH/env.
+    const capabilitiesSummary = caps
+      ? [
+          caps.jsonOutput ? 'exec --json' : null,
+          caps.sandboxWorkspaceWrite ? 'sandbox workspace-write' : null,
+          caps.cd ? '--cd (workspace fixo)' : null,
+          caps.skipGitRepoCheck ? '--skip-git-repo-check' : null
+        ].filter((c): c is string => c !== null)
+      : []
     return {
       id: 'codex',
       name: 'Codex',
       status: !s.installed ? 'not_configured' : s.authenticated === false ? 'needs_auth' : 'configured',
       detail: s.detail,
       version: s.version,
-      authenticated: s.authenticated
+      authenticated: s.authenticated,
+      binaryLabel: s.binaryLabel,
+      binarySource: s.binarySource,
+      capabilitiesSummary
     }
   }
 }

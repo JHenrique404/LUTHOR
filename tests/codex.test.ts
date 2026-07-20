@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SimEventPayload } from '@shared/ipc/contract'
 import { CodexDetector } from '../src/main/services/codex/codex-detector'
 import type { CommandResult } from '../src/main/services/codex/codex-detector'
+import { CodexBinaryResolver } from '../src/main/services/codex/codex-binary-resolver'
 import { CodexRunner, FORCE_KILL_TIMEOUT_MS } from '../src/main/services/codex/codex-runner'
 import type { RunnerEvent, SpawnedProcess } from '../src/main/services/codex/codex-runner'
 import {
@@ -63,6 +64,10 @@ const READY_STATUS: CodexStatus = {
   authDetail: 'Logged in using ChatGPT',
   capabilities: CAPS,
   detail: 'Pronto (codex-cli 0.144.5).',
+  binaryPath: 'C:\\real\\bin\\codex.exe',
+  binaryLabel: 'codex.exe',
+  binarySource: 'auto',
+  failureCode: null,
   checkedAt: Date.now()
 }
 
@@ -79,14 +84,19 @@ interface ManagerHarness {
   proc: FakeProcess
   events: SimEventPayload[]
   dir: string
+  spawnedCommands: string[]
 }
 
 function createManager(options: { dirty?: boolean; forceKill?: (pid: number) => void } = {}): ManagerHarness {
   const proc = new FakeProcess()
   const events: SimEventPayload[] = []
+  const spawnedCommands: string[] = []
   const dir = mkdtempSync(join(tmpdir(), 'luthor-codex-'))
   const runner = new CodexRunner({
-    spawnFn: () => proc,
+    spawnFn: (command) => {
+      spawnedCommands.push(command)
+      return proc
+    },
     forceKill: options.forceKill ?? (() => {})
   })
   const manager = new CodexRunManager({
@@ -95,54 +105,242 @@ function createManager(options: { dirty?: boolean; forceKill?: (pid: number) => 
     runner,
     runCommand: fakeGit(options.dirty ?? false)
   })
-  return { manager, proc, events, dir }
+  return { manager, proc, events, dir, spawnedCommands }
 }
 
 const workspace = { ...createSeedWorkspaces()[0], path: 'C:\\projetos\\meu-app' }
 
 // ── Detector ───────────────────────────────────────────────────────────────
 
+const RESOLVED_EXE = 'C:\\real\\bin\\codex.exe'
+
 describe('CodexDetector — nada é assumido sobre a CLI', () => {
-  it('CLI ausente: installed false com instrução clara', async () => {
-    const detector = new CodexDetector(async () => {
-      throw new Error('ENOENT')
+  it('CLI ausente (ENOENT): installed false com instrução clara', async () => {
+    const detector = new CodexDetector({
+      resolveBinary: async () => ({
+        path: null,
+        source: null,
+        version: null,
+        failure: 'not_found',
+        manualInvalid: false
+      })
     })
     const status = await detector.refresh()
     expect(status.installed).toBe(false)
+    expect(status.failureCode).toBe('not_found')
     expect(status.detail).toMatch(/não encontrado/i)
     expect((await detector.isUsable()).ok).toBe(false)
   })
 
+  it('shim do NVM (EPERM): mensagem útil apontando para o codex.exe real', async () => {
+    const detector = new CodexDetector({
+      resolveBinary: async () => ({
+        path: null,
+        source: null,
+        version: null,
+        failure: 'shim_only',
+        manualInvalid: true
+      })
+    })
+    const status = await detector.refresh()
+    expect(status.installed).toBe(false)
+    expect(status.failureCode).toBe('shim_only')
+    expect(status.detail).toMatch(/shim do NVM/i)
+    expect(status.detail).toMatch(/codex\.exe real/i)
+    expect(status.detail).toMatch(/manual configurado é inválido/i)
+  })
+
   it('autenticação ausente: needs auth, sem login automático', async () => {
-    const detector = new CodexDetector(async (_cmd, args) => {
-      if (args[0] === '--version') return { code: 0, stdout: 'codex-cli 0.144.5\n', stderr: '' }
-      if (args[0] === 'exec') {
-        return { code: 0, stdout: '--json --sandbox workspace-write --cd --skip-git-repo-check --color never', stderr: '' }
+    const detector = new CodexDetector({
+      resolveBinary: async () => ({
+        path: RESOLVED_EXE,
+        source: 'auto',
+        version: 'codex-cli 0.144.5',
+        failure: null,
+        manualInvalid: false
+      }),
+      runCommand: async (cmd, args) => {
+        expect(cmd).toBe(RESOLVED_EXE) // detecta com o caminho RESOLVIDO
+        if (args[0] === 'exec') {
+          return { code: 0, stdout: '--json --sandbox workspace-write --cd --skip-git-repo-check --color never', stderr: '' }
+        }
+        if (args[0] === 'login') return { code: 1, stdout: 'Not logged in\n', stderr: '' }
+        return { code: 1, stdout: '', stderr: '' }
       }
-      if (args[0] === 'login') return { code: 1, stdout: 'Not logged in\n', stderr: '' }
-      return { code: 1, stdout: '', stderr: '' }
     })
     const status = await detector.refresh()
     expect(status.installed).toBe(true)
     expect(status.authenticated).toBe(false)
     expect(status.detail).toMatch(/codex login/)
+    expect(status.binaryLabel).toBe('codex.exe')
     expect((await detector.isUsable()).ok).toBe(false)
   })
 
-  it('CLI pronta: capacidades detectadas do --help real', async () => {
-    const detector = new CodexDetector(async (_cmd, args) => {
-      if (args[0] === '--version') return { code: 0, stdout: 'codex-cli 0.144.5\n', stderr: '' }
-      if (args[0] === 'exec') {
-        return { code: 0, stdout: '--json --sandbox [read-only, workspace-write] --cd --skip-git-repo-check --color never', stderr: '' }
+  it('CLI pronta: capacidades do --help real; caminho manual sinalizado', async () => {
+    const detector = new CodexDetector({
+      resolveBinary: async () => ({
+        path: RESOLVED_EXE,
+        source: 'manual',
+        version: 'codex-cli 0.144.5',
+        failure: null,
+        manualInvalid: false
+      }),
+      runCommand: async (_cmd, args) => {
+        if (args[0] === 'exec') {
+          return { code: 0, stdout: '--json --sandbox [read-only, workspace-write] --cd --skip-git-repo-check --color never', stderr: '' }
+        }
+        if (args[0] === 'login') return { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' }
+        return { code: 1, stdout: '', stderr: '' }
       }
-      if (args[0] === 'login') return { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' }
-      return { code: 1, stdout: '', stderr: '' }
     })
     const status = await detector.refresh()
     expect(status.version).toBe('codex-cli 0.144.5')
     expect(status.capabilities).toEqual(CAPS)
     expect(status.authenticated).toBe(true)
+    expect(status.binaryPath).toBe(RESOLVED_EXE)
+    expect(status.binarySource).toBe('manual')
+    expect(status.detail).toMatch(/executável manual/)
     expect((await detector.isUsable()).ok).toBe(true)
+  })
+})
+
+// ── Resolvedor de binário ──────────────────────────────────────────────────
+
+describe('CodexBinaryResolver — Windows com shims do NVM/npm', () => {
+  const SHIM_DIR = 'C:\\nvm4w\\nodejs'
+  const REAL_EXE =
+    'C:\\nvm4w\\nodejs\\node_modules\\@openai\\codex\\vendor\\bin\\codex.exe'
+
+  interface FakeWorld {
+    whereLines: string[]
+    files: Set<string>
+    packageExes: string[]
+    /** caminho -> comportamento do --version */
+    probes: Record<string, { code: number; stdout: string } | { errCode: string }>
+  }
+
+  function makeResolver(world: FakeWorld, manual: string | null = null): CodexBinaryResolver {
+    return new CodexBinaryResolver({
+      platform: 'win32',
+      getManualPath: async () => manual,
+      fsAdapter: {
+        realpath: async (p) => p,
+        isFile: async (p) => world.files.has(p),
+        findCodexExeUnder: async (dir) =>
+          dir.includes('@openai') ? world.packageExes : []
+      },
+      runCommand: async (cmd, _args) => {
+        if (cmd === 'where.exe') {
+          return { code: world.whereLines.length > 0 ? 0 : 1, stdout: world.whereLines.join('\r\n'), stderr: '' }
+        }
+        const probe = world.probes[cmd]
+        if (!probe) {
+          const err = new Error('spawn EPERM') as NodeJS.ErrnoException
+          err.code = 'EPERM'
+          throw err
+        }
+        if ('errCode' in probe) {
+          const err = new Error(`spawn ${probe.errCode}`) as NodeJS.ErrnoException
+          err.code = probe.errCode
+          throw err
+        }
+        return { code: probe.code, stdout: probe.stdout, stderr: '' }
+      }
+    })
+  }
+
+  it('where com shim E .exe: seleciona exclusivamente o .exe que responde', async () => {
+    const exe = 'C:\\tools\\codex.exe'
+    const resolver = makeResolver({
+      whereLines: [`${SHIM_DIR}\\codex`, `${SHIM_DIR}\\codex.cmd`, exe],
+      files: new Set([exe]),
+      packageExes: [],
+      probes: { [exe]: { code: 0, stdout: 'codex-cli 0.144.5' } }
+    })
+    const result = await resolver.resolve()
+    expect(result).toMatchObject({ path: exe, source: 'auto', version: 'codex-cli 0.144.5' })
+  })
+
+  it('PATH só com shims: encontra o codex.exe dentro do pacote @openai/codex', async () => {
+    const resolver = makeResolver({
+      whereLines: [`${SHIM_DIR}\\codex`, `${SHIM_DIR}\\codex.cmd`],
+      files: new Set([REAL_EXE]),
+      packageExes: [REAL_EXE],
+      probes: { [REAL_EXE]: { code: 0, stdout: 'codex-cli 0.144.5' } }
+    })
+    const result = await resolver.resolve()
+    expect(result.path).toBe(REAL_EXE)
+    expect(result.source).toBe('auto')
+  })
+
+  it('EPERM no alias: falha classificada como not_executable (não "ausente")', async () => {
+    const badExe = 'C:\\tools\\codex.exe'
+    const resolver = makeResolver({
+      whereLines: [badExe],
+      files: new Set([badExe]),
+      packageExes: [],
+      probes: { [badExe]: { errCode: 'EPERM' } }
+    })
+    const result = await resolver.resolve()
+    expect(result.path).toBeNull()
+    expect(result.failure).toBe('not_executable')
+  })
+
+  it('só shims, sem exe em lugar nenhum: shim_only', async () => {
+    const resolver = makeResolver({
+      whereLines: [`${SHIM_DIR}\\codex`, `${SHIM_DIR}\\codex.cmd`],
+      files: new Set(),
+      packageExes: [],
+      probes: {}
+    })
+    const result = await resolver.resolve()
+    expect(result.failure).toBe('shim_only')
+  })
+
+  it('caminho manual VÁLIDO entra como fallback quando a automática falha', async () => {
+    const manual = 'C:\\escolhido\\codex.exe'
+    const resolver = makeResolver(
+      {
+        whereLines: [`${SHIM_DIR}\\codex`],
+        files: new Set([manual]),
+        packageExes: [],
+        probes: { [manual]: { code: 0, stdout: 'codex-cli 0.144.5' } }
+      },
+      manual
+    )
+    const result = await resolver.resolve()
+    expect(result).toMatchObject({ path: manual, source: 'manual' })
+  })
+
+  it('caminho manual INVÁLIDO (não .exe / inexistente) é ignorado e sinalizado', async () => {
+    const resolver = makeResolver(
+      {
+        whereLines: [`${SHIM_DIR}\\codex`],
+        files: new Set(),
+        packageExes: [],
+        probes: {}
+      },
+      'C:\\escolhido\\codex.cmd'
+    )
+    const result = await resolver.resolve()
+    expect(result.path).toBeNull()
+    expect(result.manualInvalid).toBe(true)
+  })
+
+  it('detecção automática saudável IGNORA o caminho manual', async () => {
+    const auto = 'C:\\tools\\codex.exe'
+    const resolver = makeResolver(
+      {
+        whereLines: [auto],
+        files: new Set([auto, 'C:\\manual\\codex.exe']),
+        packageExes: [],
+        probes: { [auto]: { code: 0, stdout: 'codex-cli 0.144.5' } }
+      },
+      'C:\\manual\\codex.exe'
+    )
+    const result = await resolver.resolve()
+    expect(result.path).toBe(auto)
+    expect(result.source).toBe('auto')
   })
 })
 
@@ -262,6 +460,12 @@ describe('CodexRunManager — run real na Agent Office', () => {
     expect(snapshot.run.state).toBe('completed')
     expect(snapshot.events.some((e) => e.message.includes('gpt-5.3-codex'))).toBe(true)
     expect(snapshot.events.at(-1)?.message).toContain('Resumo final')
+  })
+
+  it('runner usa o executável RESOLVIDO, não a string "codex"', async () => {
+    const { manager, spawnedCommands } = createManager()
+    await manager.start({ text: 'Tarefa', workspace, cliStatus: READY_STATUS })
+    expect(spawnedCommands).toEqual(['C:\\real\\bin\\codex.exe'])
   })
 
   it('mudanças Git pré-existentes geram aviso explícito (verificação só leitura)', async () => {

@@ -42,6 +42,11 @@ export interface RegisterIpcDeps {
   workspaces: WorkspaceService
   /** Reexecuta a detecção real da CLI (Fase 2B). */
   refreshConnections: () => Promise<void>
+  /**
+   * Fallback manual do executável Codex: valida (.exe existente/canônico)
+   * e persiste só o caminho. null = voltar à detecção automática.
+   */
+  setManualCodexBinary: (path: string | null) => Promise<void>
 }
 
 export function registerIpcHandlers(deps: RegisterIpcDeps): void {
@@ -143,6 +148,32 @@ export function registerIpcHandlers(deps: RegisterIpcDeps): void {
     Promise.all(providers.map((p) => p.getStatus()))
   )
   ipcMain.handle(IpcChannels.connectionsRefresh, async () => {
+    await deps.refreshConnections()
+    return Promise.all(providers.map((p) => p.getStatus()))
+  })
+
+  // Fallback manual do executável Codex: dialog nativo restrito a .exe;
+  // validação e persistência acontecem no main (nada de PATH no renderer).
+  ipcMain.handle(IpcChannels.codexChooseBinary, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Escolher executável Codex',
+      buttonLabel: 'Usar este executável',
+      filters: [{ name: 'Executável', extensions: ['exe'] }],
+      properties: ['openFile' as const]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    if (!result.canceled && result.filePaths.length > 0) {
+      await deps.setManualCodexBinary(result.filePaths[0])
+      await deps.refreshConnections()
+    }
+    return Promise.all(providers.map((p) => p.getStatus()))
+  })
+
+  ipcMain.handle(IpcChannels.codexClearBinary, async () => {
+    await deps.setManualCodexBinary(null)
     await deps.refreshConnections()
     return Promise.all(providers.map((p) => p.getStatus()))
   })

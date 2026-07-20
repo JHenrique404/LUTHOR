@@ -175,6 +175,8 @@ export class CodexRunManager {
     this.runner.start({
       prompt: title,
       cwd: input.workspace.path,
+      // Executável resolvido pela detecção — nunca a string "codex" crua.
+      binaryPath: input.cliStatus.binaryPath ?? undefined,
       capabilities: input.cliStatus.capabilities,
       isGitRepo: git.isRepo,
       onEvent: (event) => this.handleRunnerEvent(event)

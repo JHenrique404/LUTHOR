@@ -55,7 +55,9 @@ const api: LuthorApi = {
   },
   connections: {
     list: () => ipcRenderer.invoke(IpcChannels.connectionsList),
-    refresh: () => ipcRenderer.invoke(IpcChannels.connectionsRefresh)
+    refresh: () => ipcRenderer.invoke(IpcChannels.connectionsRefresh),
+    chooseCodexBinary: () => ipcRenderer.invoke(IpcChannels.codexChooseBinary),
+    clearCodexBinary: () => ipcRenderer.invoke(IpcChannels.codexClearBinary)
   }
 }
 
