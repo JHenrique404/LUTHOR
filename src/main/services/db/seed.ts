@@ -453,6 +453,8 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         at: now - 2 * MIN
       }
     ],
-    profiles: createSeedProfiles()
+    profiles: createSeedProfiles(),
+    result: null,
+    effectiveConfig: null
   }
 }

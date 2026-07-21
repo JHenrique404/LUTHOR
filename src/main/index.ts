@@ -67,10 +67,16 @@ async function bootstrap(): Promise<void> {
     emit: emitToRenderer
   })
 
+  // Uso por run só é "suportado" depois que a CLI emitir dados reais uma vez.
+  let usageObservedOnce = false
+
   // Run REAL (Fase 2B): um único processo Codex por vez, transcript em userData.
   const codexManager = new CodexRunManager({
     emit: emitToRenderer,
-    dataDir: app.getPath('userData')
+    dataDir: app.getPath('userData'),
+    onUsageObserved: () => {
+      usageObservedOnce = true
+    }
   })
 
   // O run demo abre apontando para o workspace ativo persistido.
@@ -118,7 +124,9 @@ async function bootstrap(): Promise<void> {
     },
     setManualCodexBinary: async (path) => {
       await codexSettings.setManualBinaryPath(path)
-    }
+    },
+    codexCapabilities: () => codexDetector.providerCapabilities(usageObservedOnce),
+    getActiveWorkspacePath: () => workspaceRegistry.getActive()?.path ?? null
   })
 
   mainWindow = new BrowserWindow({

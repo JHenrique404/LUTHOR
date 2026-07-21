@@ -18,11 +18,13 @@ import { PixelBadge } from '@renderer/components/ui/PixelBadge'
 import { PixelTabs } from '@renderer/components/ui/PixelTabs'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
 import { StepProgress } from '@renderer/components/ui/StepProgress'
+import { RunResultPanel } from '@renderer/components/office/RunResultPanel'
 
-/** Detalhe do Run: plano, agentes, logs simulados, checkpoints e perguntas. */
+/** Detalhe do Run: resultado (real), plano, agentes, logs, checkpoints e perguntas. */
 export function RunDetailPage(): React.JSX.Element {
   const { snapshot } = useRunStore()
-  const [tab, setTab] = useState('plan')
+  const realRun = snapshot?.run.executor === 'codex_cli'
+  const [tab, setTab] = useState(realRun ? 'result' : 'plan')
   const [logFilter, setLogFilter] = useState('')
   const now = useNow(1000)
 
@@ -45,16 +47,29 @@ export function RunDetailPage(): React.JSX.Element {
             <StatusDot colorClass={runStyle.dot} animClass={runStyle.anim} />
             {RUN_STATE_LABELS[snapshot.run.state]}
           </PixelBadge>
-          <span className="text-warn text-xs">dados simulados</span>
+          {realRun ? (
+            <span className="font-pixel text-exec text-[10px] uppercase">executor real · codex</span>
+          ) : (
+            <span className="text-warn text-xs">dados simulados</span>
+          )}
         </div>
         <p className="text-sm text-ink">{snapshot.task.title}</p>
-        <StepProgress steps={snapshot.steps} />
+        {!realRun && <StepProgress steps={snapshot.steps} />}
       </header>
 
       <PixelTabs
         active={tab}
         onChange={setTab}
         tabs={[
+          ...(realRun
+            ? [
+                {
+                  id: 'result',
+                  label: 'Resultado',
+                  content: <RunResultPanel snapshot={snapshot} />
+                }
+              ]
+            : []),
           {
             id: 'plan',
             label: 'Plano',

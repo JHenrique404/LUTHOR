@@ -1,4 +1,4 @@
-import type { RunEvent, RunEventType, RunSnapshot, Workspace } from '@shared/domain'
+import type { ChangedFile, RunEvent, RunEventType, RunResult, RunSnapshot, Workspace } from '@shared/domain'
 import { assertTransition } from '@shared/state-machine/run-state'
 import type { SimEventPayload } from '@shared/ipc/contract'
 import type { CodexStatus } from './codex-detector'
@@ -7,6 +7,8 @@ import { CodexRunner } from './codex-runner'
 import type { CommandRunner } from './codex-detector'
 import { defaultCommandRunner } from './codex-detector'
 import { TranscriptWriter } from './transcript'
+import type { ContextRef } from './context-references'
+import { buildContextInstruction } from './context-references'
 
 /**
  * Run REAL com Codex CLI — Fase 2B.
@@ -24,6 +26,11 @@ export interface CodexStartInput {
   workspace: Workspace
   cliStatus: CodexStatus
   profileId?: string
+  profileName?: string
+  /** Modelo escolhido (só aplicado se a CLI o aceitar). null = padrão. */
+  model?: string | null
+  /** Referências de contexto (@arquivo/@pasta), já validadas no main. */
+  contextRefs?: ContextRef[]
 }
 
 export interface CodexRunManagerOptions {
@@ -35,7 +42,12 @@ export interface CodexRunManagerOptions {
   runCommand?: CommandRunner
   now?: () => number
   createTranscript?: (dataDir: string, runId: string) => TranscriptWriter
+  /** Notifica quando a CLI emitiu dados de uso reais (habilita capacidade). */
+  onUsageObserved?: () => void
 }
+
+/** Limite de arquivos listados no resumo Git de leitura. */
+const MAX_CHANGED_FILES = 200
 
 export class CodexRunManager {
   private snapshot: RunSnapshot | null = null
@@ -45,14 +57,23 @@ export class CodexRunManager {
   private runSeq = 0
   private model: string | null = null
   private lastAgentMessage: string | null = null
-  private meta: { startedAt: number; preExisting: boolean; cliVersion: string | null } | null =
-    null
+  private usage: Record<string, number> | null = null
+  /** Linhas do `git status --porcelain` ANTES do run (para diferenciar). */
+  private preRunStatusLines: Set<string> = new Set()
+  private gitAvailable = false
+  private meta: {
+    startedAt: number
+    preExisting: boolean
+    cliVersion: string | null
+    cwd: string
+  } | null = null
 
   private readonly emitPayload: (payload: SimEventPayload) => void
   private readonly dataDir: string
   private readonly runCommand: CommandRunner
   private readonly now: () => number
   private readonly createTranscript: (dataDir: string, runId: string) => TranscriptWriter
+  private readonly onUsageObserved: () => void
 
   constructor(options: CodexRunManagerOptions) {
     this.emitPayload = options.emit
@@ -62,6 +83,7 @@ export class CodexRunManager {
     this.now = options.now ?? Date.now
     this.createTranscript =
       options.createTranscript ?? ((dir, runId) => new TranscriptWriter(dir, runId))
+    this.onUsageObserved = options.onUsageObserved ?? (() => {})
   }
 
   isBusy(): boolean {
@@ -85,14 +107,54 @@ export class CodexRunManager {
    * Verificação Git SOMENTE LEITURA antes do run: detecta mudanças locais
    * pré-existentes. Nenhuma escrita Git em hipótese alguma.
    */
-  private async gitReadOnlyCheck(cwd: string): Promise<{ isRepo: boolean; dirty: boolean }> {
+  private async gitReadOnlyCheck(
+    cwd: string
+  ): Promise<{ isRepo: boolean; dirty: boolean; lines: string[] }> {
     try {
       const inside = await this.runCommand('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'])
-      if (inside.code !== 0 || !/true/.test(inside.stdout)) return { isRepo: false, dirty: false }
+      if (inside.code !== 0 || !/true/.test(inside.stdout)) {
+        return { isRepo: false, dirty: false, lines: [] }
+      }
       const status = await this.runCommand('git', ['-C', cwd, 'status', '--porcelain'])
-      return { isRepo: true, dirty: status.code === 0 && status.stdout.trim().length > 0 }
+      const lines =
+        status.code === 0
+          ? status.stdout.split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean)
+          : []
+      return { isRepo: true, dirty: lines.length > 0, lines }
     } catch {
-      return { isRepo: false, dirty: false }
+      return { isRepo: false, dirty: false, lines: [] }
+    }
+  }
+
+  /** Parse "XY path" do porcelain em { status, path }. */
+  private parsePorcelainLine(line: string): { status: string; path: string } {
+    const status = line.slice(0, 2).trim()
+    let path = line.slice(3).trim()
+    // Renomeado: "old -> new"; ficamos com o destino.
+    const arrow = path.indexOf(' -> ')
+    if (arrow >= 0) path = path.slice(arrow + 4)
+    return { status, path: path.replace(/^"|"$/g, '') }
+  }
+
+  /**
+   * Resumo de arquivos alterados APÓS o run (Git só leitura). Diferencia o
+   * que já existia antes. null quando Git indisponível na pasta.
+   */
+  private async collectChangedFiles(
+    cwd: string
+  ): Promise<{ files: ChangedFile[]; truncated: boolean } | null> {
+    if (!this.gitAvailable) return null
+    try {
+      const status = await this.runCommand('git', ['-C', cwd, 'status', '--porcelain'])
+      if (status.code !== 0) return null
+      const lines = status.stdout.split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean)
+      const files = lines.slice(0, MAX_CHANGED_FILES).map((line) => {
+        const { status: st, path } = this.parsePorcelainLine(line)
+        return { path, status: st, preExisting: this.preRunStatusLines.has(line) }
+      })
+      return { files, truncated: lines.length > MAX_CHANGED_FILES }
+    } catch {
+      return null
     }
   }
 
@@ -108,9 +170,23 @@ export class CodexRunManager {
 
     this.model = null
     this.lastAgentMessage = null
+    this.usage = null
     this.eventSeq = 0
+    this.gitAvailable = git.isRepo
+    this.preRunStatusLines = new Set(git.lines)
     this.transcript = this.createTranscript(this.dataDir, runId)
-    this.meta = { startedAt: now, preExisting: git.dirty, cliVersion: input.cliStatus.version }
+    this.meta = {
+      startedAt: now,
+      preExisting: git.dirty,
+      cliVersion: input.cliStatus.version,
+      cwd: input.workspace.path
+    }
+
+    // Modelo só é EFETIVO quando a CLI aceita a flag; caso contrário, padrão.
+    const modelConfigurable = input.cliStatus.capabilities.modelFlag
+    const appliedModel = modelConfigurable && input.model ? input.model : null
+    const contextRefs = input.contextRefs ?? []
+    const promptWithContext = `${title}${buildContextInstruction(contextRefs)}`
 
     this.snapshot = {
       workspace: structuredClone(input.workspace),
@@ -152,7 +228,16 @@ export class CodexRunManager {
       questions: [],
       checkpoints: [],
       events: [],
-      profiles: []
+      profiles: [],
+      result: null,
+      // Configuração EFETIVA (não decorativa): o que foi de fato aplicado.
+      effectiveConfig: {
+        profileId: input.profileId ?? 'codex-high',
+        profileName: input.profileName ?? 'codex — padrão da CLI',
+        appliedModel,
+        appliedEffort: null,
+        contextRefs: contextRefs.map((r) => ({ relPath: r.relPath, kind: r.kind }))
+      }
     }
 
     this.pushEvent('task_received', null, `Tarefa real recebida: ${title}`)
@@ -171,14 +256,25 @@ export class CodexRunManager {
     if (!git.isRepo) {
       this.pushEvent('agent_log', null, 'Pasta sem repositório Git — seguindo com --skip-git-repo-check.')
     }
+    if (appliedModel) {
+      this.pushEvent('agent_log', 'ag-codex', `Modelo aplicado via --model: ${appliedModel}`)
+    }
+    if (contextRefs.length > 0) {
+      this.pushEvent(
+        'agent_log',
+        'ag-codex',
+        `Contexto anexado: ${contextRefs.map((r) => r.relPath).join(', ')}`
+      )
+    }
 
     this.runner.start({
-      prompt: title,
+      prompt: promptWithContext,
       cwd: input.workspace.path,
       // Executável resolvido pela detecção — nunca a string "codex" crua.
       binaryPath: input.cliStatus.binaryPath ?? undefined,
       capabilities: input.cliStatus.capabilities,
       isGitRepo: git.isRepo,
+      model: appliedModel,
       onEvent: (event) => this.handleRunnerEvent(event)
     })
 
@@ -228,6 +324,11 @@ export class CodexRunManager {
           this.model = model
           this.pushEvent('agent_log', 'ag-codex', `Modelo informado pela CLI: ${model}`)
         }
+        const usage = extractUsage(event.parsed)
+        if (usage) {
+          this.usage = { ...(this.usage ?? {}), ...usage }
+          this.onUsageObserved()
+        }
         const agentText = extractAgentMessage(event.parsed)
         if (agentText) this.lastAgentMessage = agentText
         if (message) this.pushEvent('agent_log', 'ag-codex', message)
@@ -239,13 +340,13 @@ export class CodexRunManager {
         break
       }
       case 'exit': {
-        this.finishRun(event.code, event.cancelled)
+        void this.finishRun(event.code, event.cancelled)
         break
       }
     }
   }
 
-  private finishRun(code: number | null, cancelled: boolean): void {
+  private async finishRun(code: number | null, cancelled: boolean): Promise<void> {
     if (!this.snapshot || this.isTerminal()) return
     const { run } = this.snapshot
     const agent = this.snapshot.agents[0]
@@ -271,6 +372,8 @@ export class CodexRunManager {
       this.pushEvent('agent_failed', 'ag-codex', `Processo terminou com exit ${code ?? 'desconhecido'}`)
     }
 
+    const finishedAt = this.now()
+
     if (this.meta && this.transcript) {
       this.transcript.writeMeta({
         runId: run.id,
@@ -279,11 +382,35 @@ export class CodexRunManager {
         provider: 'codex_cli',
         cliVersion: this.meta.cliVersion,
         startedAt: this.meta.startedAt,
-        finishedAt: this.now(),
+        finishedAt,
         exitCode: code,
         cancelled,
         preExistingGitChanges: this.meta.preExisting
       })
+    }
+
+    // Resumo Git de LEITURA pós-run (arquivos alterados). null se sem Git.
+    const changed = this.meta ? await this.collectChangedFiles(this.meta.cwd) : null
+
+    // Monta o resultado auditável final (nada estimado; nullable = "não informado").
+    const result: RunResult = {
+      provider: 'codex_cli',
+      cliVersion: this.meta?.cliVersion ?? null,
+      model: this.model,
+      finalMessage: this.lastAgentMessage,
+      startedAt: this.meta?.startedAt ?? finishedAt,
+      finishedAt,
+      exitCode: code,
+      cancelled,
+      preExistingGitChanges: this.gitAvailable ? (this.meta?.preExisting ?? false) : null,
+      changedFiles: changed?.files ?? null,
+      changedFilesTruncated: changed?.truncated ?? false,
+      usage: this.usage
+    }
+    // Só re-emite se o snapshot ainda é este run (não foi substituído).
+    if (this.snapshot && this.snapshot.run.id === run.id) {
+      this.snapshot.result = result
+      this.pushEvent('run_state_changed', null, 'Resultado do run disponível na aba Resultado.')
     }
   }
 
@@ -337,6 +464,31 @@ export function extractModel(parsed: Record<string, unknown> | null): string | n
       const nested = firstString(value as Record<string, unknown>, ['model'])
       if (nested) return nested
     }
+  }
+  return null
+}
+
+/**
+ * Extrai uso/tokens SOMENTE se a CLI emitir um objeto estruturado de números.
+ * Procura chaves usuais (usage, token_usage, token_count) e coleta pares
+ * numéricos. null = nada verificável → a UI mostra "não informado".
+ * NUNCA estima nem soma valores heurísticos.
+ */
+export function extractUsage(parsed: Record<string, unknown> | null): Record<string, number> | null {
+  if (!parsed) return null
+  const containers: unknown[] = [parsed['usage'], parsed['token_usage'], parsed['token_count']]
+  const item = parsed['item']
+  if (typeof item === 'object' && item !== null) {
+    const rec = item as Record<string, unknown>
+    containers.push(rec['usage'], rec['token_usage'], rec['token_count'])
+  }
+  for (const container of containers) {
+    if (typeof container !== 'object' || container === null) continue
+    const numbers: Record<string, number> = {}
+    for (const [key, value] of Object.entries(container as Record<string, unknown>)) {
+      if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value
+    }
+    if (Object.keys(numbers).length > 0) return numbers
   }
   return null
 }

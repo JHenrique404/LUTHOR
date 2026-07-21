@@ -209,6 +209,44 @@ export const RunEventSchema = z.object({
 })
 export type RunEvent = z.infer<typeof RunEventSchema>
 
+/** Arquivo tocado no workspace após um run real (Git somente leitura). */
+export const ChangedFileSchema = z.object({
+  path: z.string(),
+  /** Código porcelain do Git (M, A, ??, …). */
+  status: z.string(),
+  /** true = já estava alterado ANTES do run (não atribuível ao executor). */
+  preExisting: z.boolean()
+})
+export type ChangedFile = z.infer<typeof ChangedFileSchema>
+
+/** Uso por run: SOMENTE números emitidos estruturadamente pela CLI. */
+export const RunUsageSchema = z.record(z.string(), z.number())
+
+/**
+ * Resultado final de um run REAL — nada aqui é estimado ou inventado:
+ * cada campo nullable fica null quando a CLI/Git não informou.
+ */
+export const RunResultSchema = z.object({
+  provider: z.string(),
+  cliVersion: z.string().nullable(),
+  /** Modelo APENAS se a CLI o informou nos eventos. */
+  model: z.string().nullable(),
+  /** Resposta final completa da IA (sem truncamento artificial). */
+  finalMessage: z.string().nullable(),
+  startedAt: z.number(),
+  finishedAt: z.number(),
+  exitCode: z.number().nullable(),
+  cancelled: z.boolean(),
+  /** null = Git indisponível na pasta. */
+  preExistingGitChanges: z.boolean().nullable(),
+  /** null = Git indisponível; lista via leitura pós-run. */
+  changedFiles: z.array(ChangedFileSchema).nullable(),
+  changedFilesTruncated: z.boolean(),
+  /** null = uso por run não informado pela CLI. */
+  usage: RunUsageSchema.nullable()
+})
+export type RunResult = z.infer<typeof RunResultSchema>
+
 /** Snapshot completo de um run, enviado do main para o renderer a cada evento. */
 export const RunSnapshotSchema = z.object({
   workspace: WorkspaceSchema,
@@ -219,7 +257,26 @@ export const RunSnapshotSchema = z.object({
   questions: z.array(QuestionSchema),
   checkpoints: z.array(CheckpointSchema),
   events: z.array(RunEventSchema),
-  profiles: z.array(AgentProfileSchema)
+  profiles: z.array(AgentProfileSchema),
+  /** Resultado auditável de um run REAL. null em runs simulados/em andamento. */
+  result: RunResultSchema.nullable().default(null),
+  /**
+   * Configuração EFETIVA aplicada ao run real (não decorativa): o que
+   * de fato foi passado à CLI. null em runs simulados.
+   */
+  effectiveConfig: z
+    .object({
+      profileId: z.string(),
+      profileName: z.string(),
+      /** Modelo aplicado via flag; null = padrão da CLI. */
+      appliedModel: z.string().nullable(),
+      /** Esforço aplicado via config; null = padrão da CLI. */
+      appliedEffort: z.string().nullable(),
+      /** Referências de contexto (caminhos relativos ao workspace). */
+      contextRefs: z.array(z.object({ relPath: z.string(), kind: z.enum(['file', 'folder']) }))
+    })
+    .nullable()
+    .default(null)
 })
 export type RunSnapshot = z.infer<typeof RunSnapshotSchema>
 

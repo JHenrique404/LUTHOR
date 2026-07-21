@@ -34,6 +34,31 @@ delegados (Frontend, Backend, Pesquisador, Verificador) em uma "Agent Office" pi
 - **X da janela** continua só ocultando para a bandeja; o processo real segue
   rodando oculto.
 
+## Console de execução real e contexto seguro (Fase 2B.1)
+
+- **Aba "Resultado"** no detalhe de um run real (`RunResultPanel`): resposta
+  final da IA **sem truncar**, estado final, provider/versão, modelo só se a
+  CLI informar, duração, cancelamento/falha, aviso de mudanças Git
+  pré-existentes e **resumo de arquivos alterados** (Git de leitura,
+  novos × pré-existentes). Logs técnicos ficam em aba própria; o transcript
+  bruto continua local e limitado.
+- **Capacidades honestas por provider** (`shared/domain/provider-capabilities.ts`):
+  contrato genérico (modelos, esforço, uso, imagens, referências, plano,
+  perguntas). Para o Codex atual: **não enumera modelos** → composer mostra só
+  "Usar padrão da CLI"; esforço não configurável; o perfil exibido reflete a
+  **configuração efetiva** (`effectiveConfig`), não um nome decorativo.
+  Estrutura preparada para o futuro `claude-opus-orchestrator` (Fase 2C, não
+  integrado).
+- **Contexto @arquivo/@pasta** (`context-references.ts`): picker nativo limitado
+  ao workspace ativo, caminhos **relativos**, denylist por padrão (.env, chaves,
+  .git, node_modules, binários, arquivos > 1 MB), lista removível e instrução
+  clara anexada ao prompt. Sem varredura ampla — o Codex decide o que abrir.
+- **Uso honesto**: só tokens/custo que a CLI emitir estruturados; caso
+  contrário, "Uso por run não informado pela CLI" + link para o painel oficial.
+  Nunca estimamos consumo.
+- **Imagens**: a flag pode existir, mas o envio **não é suportado** nesta fase —
+  o composer avisa em vez de aceitar e descartar silenciosamente.
+
 ## Stack
 
 - **Electron + TypeScript + React + Vite** (via [electron-vite](https://electron-vite.org))
@@ -233,8 +258,14 @@ Roadmap: preferência configurável nas Configurações para escolher entre
   processo real por vez, sandboxed no workspace ativo, com detecção de CLI,
   logs estruturados, cancelamento gracioso e transcript local — mesma IPC,
   mesmo snapshot, mesmo renderer.
-- **Fases futuras**: Claude Code, orquestrador real/delegação, múltiplos
-  agentes e workspaces em paralelo, worktrees Git reais, diff visual, OAuth e
+- **Fase 2B.1 — console de execução real e contexto seguro**: ✅ concluída. Aba
+  Resultado auditável, capacidades honestas por provider, referências
+  @arquivo/@pasta limitadas ao workspace e seção de Uso sem estimativas.
+- **Fase 2C (reservada) — Claude/Opus como orquestrador**: perfil
+  `claude-opus-orchestrator` (estrutura já preparada, não integrada),
+  delegação e múltiplos agentes reais.
+- **Fases futuras**: workspaces em paralelo, worktrees Git reais, diff visual,
+  anexos de imagem, `/plan` executável, perguntas interativas da CLI, OAuth e
   modelos locais.
 
 ## Direção visual

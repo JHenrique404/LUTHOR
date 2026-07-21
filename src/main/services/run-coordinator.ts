@@ -63,11 +63,17 @@ export class RunCoordinator {
       // A simulação para de emitir; o run real assume a Office.
       this.sim.stop()
       const status = await this.detector.status()
+      // Modelo só é efetivo se a CLI realmente aceitar a flag.
+      const modelConfigurable = status.capabilities?.modelFlag ?? false
+      const appliedModel = modelConfigurable && input.codexModel ? input.codexModel : null
       const snapshot = await this.codex.start({
         text: input.text,
         workspace,
         cliStatus: status,
-        profileId: 'codex-high'
+        profileId: 'codex-high',
+        profileName: appliedModel ? `codex — modelo ${appliedModel}` : 'codex — padrão da CLI',
+        model: appliedModel,
+        contextRefs: input.contextRefs ?? []
       })
       this.activeKind = 'codex'
       return snapshot

@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import type { ProviderCapabilities } from '@shared/domain'
+import { codexCapabilities } from '@shared/domain'
 
 /**
  * Detecção do Codex CLI — Fase 2B.
@@ -33,6 +35,10 @@ export interface CodexCapabilities {
   skipGitRepoCheck: boolean
   /** `--color never` para saída limpa. */
   colorNever: boolean
+  /** `-m/--model` — a CLI aceita escolher modelo (não enumera quais). */
+  modelFlag: boolean
+  /** `-i/--image` — flag existe, mas o envio de imagens NÃO é implementado. */
+  imageFlag: boolean
 }
 
 export interface CodexStatus {
@@ -186,7 +192,9 @@ export class CodexDetector {
         sandboxWorkspaceWrite: /--sandbox\b/.test(text) && /workspace-write/.test(text),
         cd: /--cd\b/.test(text),
         skipGitRepoCheck: /--skip-git-repo-check\b/.test(text),
-        colorNever: /--color\b/.test(text) && /\bnever\b/.test(text)
+        colorNever: /--color\b/.test(text) && /\bnever\b/.test(text),
+        modelFlag: /(^|\s)(-m,\s*)?--model\b/.test(text),
+        imageFlag: /(^|\s)(-i,\s*)?--image\b/.test(text)
       }
     } catch {
       capabilities = null
@@ -237,5 +245,27 @@ export class CodexDetector {
     }
     if (s.authenticated === false) return { ok: false, reason: s.detail }
     return { ok: true }
+  }
+
+  /**
+   * Capacidades honestas do provider para o composer/UI.
+   * usageObservedOnce: true depois que um run real emitiu dados de uso reais.
+   */
+  async providerCapabilities(usageObservedOnce = false): Promise<ProviderCapabilities> {
+    const s = await this.status()
+    const usable = (await this.isUsable()).ok
+    return codexCapabilities({
+      available: usable,
+      flags: s.capabilities
+        ? {
+            jsonOutput: s.capabilities.jsonOutput,
+            sandboxWorkspaceWrite: s.capabilities.sandboxWorkspaceWrite,
+            cd: s.capabilities.cd,
+            modelFlag: s.capabilities.modelFlag,
+            imageFlag: s.capabilities.imageFlag
+          }
+        : null,
+      usageObservedOnce
+    })
   }
 }

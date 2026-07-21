@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Agent } from '@shared/domain'
+import type { Agent, ProviderCapabilities } from '@shared/domain'
 import { RUN_STATE_LABELS, verifiedProgress } from '@shared/domain'
 import { isTerminal } from '@shared/state-machine/run-state'
 import { useRunStore } from '@renderer/stores/run-store'
@@ -49,12 +49,14 @@ export function AgentOfficePage(): React.JSX.Element {
     ok: false,
     reason: 'verificando a CLI do Codex…'
   })
+  const [codexCapabilities, setCodexCapabilities] = useState<ProviderCapabilities | null>(null)
 
   useEffect(() => {
     void window.luthor?.connections.list().then((list) => {
       const codex = list.find((c) => c.id === 'codex')
       if (codex) setCodexAvailability({ ok: codex.status === 'configured', reason: codex.detail })
     })
+    void window.luthor?.codex?.capabilities().then(setCodexCapabilities)
   }, [])
 
   if (!snapshot) {
@@ -244,6 +246,10 @@ export function AgentOfficePage(): React.JSX.Element {
           agents={snapshot.agents}
           continuedFromRunId={composer.continuedFromRunId}
           codexAvailability={codexAvailability}
+          codexCapabilities={codexCapabilities}
+          onPickContext={(k) =>
+            window.luthor?.codex?.pickContext(k) ?? Promise.resolve({ status: 'cancelled' as const })
+          }
           onClose={() => setComposer(null)}
           onSubmitNewTask={(input) => void startNewTask(input)}
           onSubmitInstruction={(input) => void addUserDirection(input)}

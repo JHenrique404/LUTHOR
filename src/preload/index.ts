@@ -58,6 +58,11 @@ const api: LuthorApi = {
     refresh: () => ipcRenderer.invoke(IpcChannels.connectionsRefresh),
     chooseCodexBinary: () => ipcRenderer.invoke(IpcChannels.codexChooseBinary),
     clearCodexBinary: () => ipcRenderer.invoke(IpcChannels.codexClearBinary)
+  },
+  codex: {
+    capabilities: () => ipcRenderer.invoke(IpcChannels.codexCapabilities),
+    pickContext: (kind: 'file' | 'folder') =>
+      ipcRenderer.invoke(IpcChannels.codexPickContext, { kind })
   }
 }
 

@@ -5,6 +5,7 @@ import type {
   RunSnapshot,
   Workspace
 } from '../domain/schemas'
+import type { ProviderCapabilities } from '../domain/provider-capabilities'
 import type {
   AnswerQuestionInput,
   CreateProfileInput,
@@ -51,9 +52,18 @@ export const IpcChannels = {
   connectionsRefresh: 'luthor:connections:refresh',
   codexChooseBinary: 'luthor:codex:choose-binary',
   codexClearBinary: 'luthor:codex:clear-binary',
+  codexCapabilities: 'luthor:codex:capabilities',
+  codexPickContext: 'luthor:codex:pick-context',
   /** main -> renderer (webContents.send) */
   simEvent: 'luthor:sim:event'
 } as const
+
+/** Resultado do picker de contexto (@arquivo/@pasta). */
+export type PickContextResult =
+  | { status: 'ok'; ref: { relPath: string; kind: 'file' | 'folder' } }
+  | { status: 'blocked'; message: string }
+  | { status: 'cancelled' }
+  | { status: 'no_workspace'; message: string }
 
 /** Payload emitido pelo SimulationEngine a cada evento. */
 export interface SimEventPayload {
@@ -176,5 +186,15 @@ export interface LuthorApi {
     chooseCodexBinary(): Promise<ConnectionStatus[]>
     /** Remove o caminho manual e volta à detecção automática. */
     clearCodexBinary(): Promise<ConnectionStatus[]>
+  }
+  codex: {
+    /** Capacidades honestas do provider (modelos, esforço, uso, imagens…). */
+    capabilities(): Promise<ProviderCapabilities>
+    /**
+     * Picker de contexto: dialog nativo limitado ao workspace ativo; valida
+     * denylist (.env/chaves/.git/node_modules/binários/grandes) e devolve
+     * caminho RELATIVO. Nenhuma leitura ampla — só stat do item.
+     */
+    pickContext(kind: 'file' | 'folder'): Promise<PickContextResult>
   }
 }

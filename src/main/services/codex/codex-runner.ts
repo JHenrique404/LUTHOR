@@ -71,6 +71,8 @@ export interface StartOptions {
   capabilities: CodexCapabilities
   /** false = pasta sem repositório Git (usa --skip-git-repo-check). */
   isGitRepo: boolean
+  /** Modelo aplicado via `-m` (só quando capabilities.modelFlag). null = padrão da CLI. */
+  model?: string | null
   onEvent: (event: RunnerEvent) => void
 }
 
@@ -96,7 +98,9 @@ export class CodexRunner {
   }
 
   /** Monta os argumentos a partir das capacidades REAIS detectadas. */
-  buildArgs(options: Pick<StartOptions, 'prompt' | 'cwd' | 'capabilities' | 'isGitRepo'>): string[] {
+  buildArgs(
+    options: Pick<StartOptions, 'prompt' | 'cwd' | 'capabilities' | 'isGitRepo' | 'model'>
+  ): string[] {
     const { capabilities } = options
     const args = ['exec']
     if (capabilities.jsonOutput) args.push('--json')
@@ -106,6 +110,8 @@ export class CodexRunner {
     if (capabilities.sandboxWorkspaceWrite) args.push('--sandbox', 'workspace-write')
     if (capabilities.cd) args.push('--cd', options.cwd)
     if (!options.isGitRepo && capabilities.skipGitRepoCheck) args.push('--skip-git-repo-check')
+    // Modelo só quando a flag foi detectada E um modelo foi escolhido de fato.
+    if (capabilities.modelFlag && options.model) args.push('--model', options.model)
     args.push(options.prompt)
     return args
   }

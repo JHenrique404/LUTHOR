@@ -271,7 +271,9 @@ export class SimulationEngine {
       ...structuredClone(parts),
       questions: [],
       checkpoints: [],
-      events: []
+      events: [],
+      result: null,
+      effectiveConfig: null
     }
     this.phase = input.mode === 'squad_demo' ? 'squad_working' : 'std_working'
     this.phaseTicks = 0

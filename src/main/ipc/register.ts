@@ -7,17 +7,20 @@ import {
   AnswerQuestionsBatchSchema,
   CreateProfileInputSchema,
   NewTaskInputSchema,
+  PickContextInputSchema,
   ProfileIdSchema,
   UpdateProfileInputSchema,
   UserDirectionInputSchema,
   WorkspaceIdSchema
 } from '@shared/ipc/schemas'
-import type { AgentProfile } from '@shared/domain'
+import type { AgentProfile, ProviderCapabilities } from '@shared/domain'
+import type { PickContextResult } from '@shared/ipc/contract'
 import type { Repository } from '../services/db/repository'
 import type { SimulationEngine } from '../services/simulation/simulation-engine'
 import type { AgentProvider } from '../services/integrations/agent-provider'
 import type { WorkspaceService } from '../services/workspaces/workspace-service'
 import type { RunCoordinator } from '../services/run-coordinator'
+import { resolveContextReference } from '../services/codex/context-references'
 
 /**
  * O main não confia nos tipos do preload/renderer: todo payload IPC
@@ -47,6 +50,10 @@ export interface RegisterIpcDeps {
    * e persiste só o caminho. null = voltar à detecção automática.
    */
   setManualCodexBinary: (path: string | null) => Promise<void>
+  /** Capacidades honestas do provider Codex (modelos/esforço/uso/imagens). */
+  codexCapabilities: () => Promise<ProviderCapabilities>
+  /** Caminho canônico do workspace ativo (para limitar o picker de contexto). */
+  getActiveWorkspacePath: () => string | null
 }
 
 export function registerIpcHandlers(deps: RegisterIpcDeps): void {
@@ -176,5 +183,32 @@ export function registerIpcHandlers(deps: RegisterIpcDeps): void {
     await deps.setManualCodexBinary(null)
     await deps.refreshConnections()
     return Promise.all(providers.map((p) => p.getStatus()))
+  })
+
+  ipcMain.handle(IpcChannels.codexCapabilities, () => deps.codexCapabilities())
+
+  // Picker de contexto: dialog nativo restrito ao workspace ativo; a validação
+  // (denylist, dentro do workspace, tamanho) acontece no main.
+  ipcMain.handle(IpcChannels.codexPickContext, async (event, raw): Promise<PickContextResult> => {
+    const { kind } = parseIpc(PickContextInputSchema, raw, IpcChannels.codexPickContext)
+    const workspacePath = deps.getActiveWorkspacePath()
+    if (!workspacePath) {
+      return { status: 'no_workspace', message: 'Nenhum workspace ativo para selecionar contexto.' }
+    }
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: kind === 'folder' ? 'Adicionar pasta ao contexto' : 'Adicionar arquivo ao contexto',
+      buttonLabel: 'Adicionar ao contexto',
+      defaultPath: workspacePath,
+      properties: [kind === 'folder' ? ('openDirectory' as const) : ('openFile' as const)]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return { status: 'cancelled' }
+
+    const evaluation = await resolveContextReference(workspacePath, result.filePaths[0], kind)
+    if (!evaluation.ok) return { status: 'blocked', message: evaluation.message }
+    return { status: 'ok', ref: evaluation.ref }
   })
 }

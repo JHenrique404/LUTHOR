@@ -1,13 +1,18 @@
 import { useState } from 'react'
-import type { Agent } from '@shared/domain'
+import type { Agent, ProviderCapabilities } from '@shared/domain'
 import { AGENT_ROLE_LABELS } from '@shared/domain'
-import type { NewTaskInput, UserDirectionInput } from '@shared/ipc/contract'
+import type { NewTaskInput, PickContextResult, UserDirectionInput } from '@shared/ipc/contract'
 import { Modal } from '@renderer/components/ui/Modal'
 import { PixelBadge } from '@renderer/components/ui/PixelBadge'
 import { PixelButton } from '@renderer/components/ui/PixelButton'
 
 type ScopeType = UserDirectionInput['scopeType']
 export type ComposerKind = 'new_task' | 'instruction'
+
+interface ContextRef {
+  relPath: string
+  kind: 'file' | 'folder'
+}
 
 interface ComposerModalProps {
   kind: ComposerKind
@@ -16,6 +21,10 @@ interface ComposerModalProps {
   continuedFromRunId?: string
   /** Executor real (Codex): disponível só quando a CLI está pronta. */
   codexAvailability?: { ok: boolean; reason?: string }
+  /** Capacidades honestas do provider Codex (modelos/esforço/imagens…). */
+  codexCapabilities?: ProviderCapabilities | null
+  /** Picker de contexto no main (dialog nativo limitado ao workspace). */
+  onPickContext?: (kind: 'file' | 'folder') => Promise<PickContextResult>
   onClose: () => void
   onSubmitNewTask: (input: NewTaskInput) => void
   onSubmitInstruction: (input: UserDirectionInput) => void
@@ -47,6 +56,8 @@ export function ComposerModal({
   agents,
   continuedFromRunId,
   codexAvailability,
+  codexCapabilities,
+  onPickContext,
   onClose,
   onSubmitNewTask,
   onSubmitInstruction
@@ -58,16 +69,50 @@ export function ComposerModal({
   const [agentId, setAgentId] = useState(directableWorkers[0]?.id ?? '')
   const [text, setText] = useState('')
   const [mode, setMode] = useState<NewTaskInput['mode']>('standard')
+  // Modelo só é selecionável quando a CLI enumera modelos de verdade.
+  const [model, setModel] = useState('')
+  const [contextRefs, setContextRefs] = useState<ContextRef[]>([])
+  const [contextError, setContextError] = useState<string | null>(null)
 
   const isNewTask = kind === 'new_task'
   const title = isNewTask ? 'Nova tarefa' : 'Direcionar run'
   const canSubmit =
     text.trim().length >= 3 && (isNewTask || scopeType !== 'agent' || agentId.length > 0)
 
+  const enumeratedModels = codexCapabilities?.availableModels ?? []
+  const canSelectModel = enumeratedModels.length > 0
+
+  const addContext = async (refKind: 'file' | 'folder'): Promise<void> => {
+    setContextError(null)
+    if (!onPickContext) return
+    const result = await onPickContext(refKind)
+    if (result.status === 'ok') {
+      setContextRefs((refs) =>
+        refs.some((r) => r.relPath === result.ref.relPath && r.kind === result.ref.kind)
+          ? refs
+          : [...refs, result.ref]
+      )
+    } else if (result.status === 'blocked') {
+      setContextError(result.message)
+    } else if (result.status === 'no_workspace') {
+      setContextError(result.message)
+    }
+  }
+
+  const removeContext = (ref: ContextRef): void => {
+    setContextRefs((refs) => refs.filter((r) => !(r.relPath === ref.relPath && r.kind === ref.kind)))
+  }
+
   const submit = (): void => {
     if (!canSubmit) return
     if (isNewTask) {
-      onSubmitNewTask({ text: text.trim(), mode, continuedFromRunId })
+      onSubmitNewTask({
+        text: text.trim(),
+        mode,
+        continuedFromRunId,
+        codexModel: mode === 'codex' && canSelectModel && model ? model : undefined,
+        contextRefs: mode === 'codex' && contextRefs.length > 0 ? contextRefs : undefined
+      })
     } else {
       onSubmitInstruction({
         kind: 'instruction',
@@ -151,6 +196,100 @@ export function ComposerModal({
                 Modo REAL: o Codex CLI vai trabalhar de verdade dentro do workspace ativo
                 (sandbox workspace-write). Nada fora da pasta é alterado sem confirmação da
                 própria CLI.
+              </p>
+            )}
+          </fieldset>
+        )}
+
+        {isNewTask && mode === 'codex' && (
+          <fieldset className="space-y-3">
+            <legend className="font-pixel mb-1 text-[10px] uppercase text-ink-faint">
+              Perfil de execução (Codex)
+            </legend>
+
+            {/* Modelo: só oferecemos escolha quando a CLI enumera modelos.
+                Codex atual não enumera → "Usar padrão da CLI". */}
+            {canSelectModel ? (
+              <label className="block">
+                <span className="font-pixel mb-1 block text-[9px] uppercase text-ink-faint">
+                  Modelo
+                </span>
+                <select
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="pixel-frame-inset w-full bg-night-950 px-3 py-2 text-sm text-ink"
+                >
+                  <option value="">Usar padrão da CLI</option>
+                  {enumeratedModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <div className="pixel-frame-inset bg-night-950 p-2 text-[11px] leading-relaxed text-ink-dim">
+                <span className="font-pixel text-[9px] uppercase text-exec">Usar padrão da CLI</span>
+                <br />
+                Esta versão do Codex não expõe uma lista de modelos verificável, e o esforço não é
+                configurável de forma confirmada — o run usa o padrão da CLI. O perfil exibido no
+                run reflete a configuração efetiva.
+              </div>
+            )}
+
+            {/* Contexto: @arquivo / @pasta limitados ao workspace. */}
+            {codexCapabilities?.supportsFileReferences && (
+              <div className="space-y-2">
+                <span className="font-pixel block text-[9px] uppercase text-ink-faint">
+                  Contexto (arquivos/pastas do workspace)
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <PixelButton variant="ghost" onClick={() => void addContext('file')}>
+                    + @arquivo
+                  </PixelButton>
+                  <PixelButton variant="ghost" onClick={() => void addContext('folder')}>
+                    + @pasta
+                  </PixelButton>
+                </div>
+                {contextError && (
+                  <p className="pixel-frame-inset bg-night-950 p-2 text-[11px] text-alert">
+                    {contextError}
+                  </p>
+                )}
+                {contextRefs.length > 0 && (
+                  <ul className="space-y-1">
+                    {contextRefs.map((ref) => (
+                      <li
+                        key={`${ref.kind}:${ref.relPath}`}
+                        className="pixel-frame flex items-center justify-between gap-2 px-2 py-1 text-xs [--px-border:var(--color-night-500)]"
+                      >
+                        <span className="font-logs truncate text-cyan-glow">
+                          {ref.kind === 'folder' ? '@pasta' : '@arquivo'} {ref.relPath}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeContext(ref)}
+                          aria-label={`Remover ${ref.relPath} do contexto`}
+                          className="font-pixel shrink-0 cursor-pointer px-1 text-ink-faint hover:text-alert"
+                        >
+                          X
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-[10px] leading-relaxed text-ink-faint">
+                  Só caminhos dentro do workspace; .env, chaves, .git, node_modules, binários e
+                  arquivos grandes são bloqueados. O Codex decide o que abrir.
+                </p>
+              </div>
+            )}
+
+            {/* Imagens: detectado mas não suportado nesta fase. */}
+            {codexCapabilities?.imageFlagDetected && !codexCapabilities.supportsImages && (
+              <p className="pixel-frame-inset bg-night-950 p-2 text-[11px] leading-relaxed text-warn">
+                Anexos de imagem: o executor atual ainda não confirmou suporte nesta fase — nada é
+                aceito e descartado silenciosamente. Disponível numa fase futura.
               </p>
             )}
           </fieldset>

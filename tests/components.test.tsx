@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { Question, RunSnapshot } from '@shared/domain'
+import type { Question, RunResult, RunSnapshot } from '@shared/domain'
 import { StepProgress } from '@renderer/components/ui/StepProgress'
 import { RunProgressSummary } from '@renderer/components/ui/RunProgressSummary'
 import { AgentCard } from '@renderer/components/office/AgentCard'
 import { ComposerModal } from '@renderer/components/office/ComposerModal'
 import { DecisionBox } from '@renderer/components/office/DecisionBox'
 import { SquadCard } from '@renderer/components/office/SquadCard'
+import { RunResultPanel } from '@renderer/components/office/RunResultPanel'
 import { AgentOfficePage } from '@renderer/pages/AgentOfficePage'
 import { ConnectionsPage } from '@renderer/pages/ConnectionsPage'
 import { useRunStore } from '@renderer/stores/run-store'
@@ -213,6 +214,159 @@ describe('DecisionBox', () => {
         expect.objectContaining({ questionId: 'q-2', freeText: '__Host-luthor' })
       ])
     )
+  })
+})
+
+describe('ComposerModal — contexto e capacidades Codex (Fase 2B.1)', () => {
+  const codexCaps = {
+    provider: 'codex' as const,
+    providerName: 'Codex',
+    available: true,
+    availableModels: [] as string[],
+    modelConfigurable: true,
+    availableEffortLevels: [] as string[],
+    effortConfigurable: false,
+    supportsUsageReporting: false,
+    supportsImages: false,
+    imageFlagDetected: true,
+    supportsFileReferences: true,
+    supportsPlanMode: false,
+    supportsInteractiveQuestions: false,
+    usageDashboardUrl: 'https://platform.openai.com/usage'
+  }
+
+  function renderCodexComposer(pick?: ReturnType<typeof vi.fn>) {
+    const onSubmitNewTask = vi.fn()
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={pick ?? vi.fn()}
+        onClose={() => {}}
+        onSubmitNewTask={onSubmitNewTask}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    return onSubmitNewTask
+  }
+
+  it('sem lista de modelos: mostra "Usar padrão da CLI", não um dropdown falso', async () => {
+    renderCodexComposer()
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    expect(screen.getAllByText(/Usar padrão da CLI/i).length).toBeGreaterThan(0)
+    // Nenhum modelo fixo inventado.
+    expect(screen.queryByText(/GPT-5|Opus/i)).not.toBeInTheDocument()
+  })
+
+  it('imagem detectada mas não suportada: aviso claro, sem aceitar anexo', async () => {
+    renderCodexComposer()
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    expect(screen.getByText(/ainda não confirmou suporte/i)).toBeInTheDocument()
+  })
+
+  it('adiciona contexto permitido, mostra bloqueio e remove item', async () => {
+    const pick = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'ok', ref: { relPath: 'src/a.ts', kind: 'file' } })
+      .mockResolvedValueOnce({ status: 'blocked', message: 'Bloqueado por padrão: ".env" parece conter segredos.' })
+    const onSubmit = renderCodexComposer(pick)
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+
+    await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
+    expect(await screen.findByText(/@arquivo src\/a\.ts/)).toBeInTheDocument()
+
+    // segunda seleção bloqueada mostra a razão
+    await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
+    expect(await screen.findByText(/parece conter segredos/i)).toBeInTheDocument()
+
+    // envia com o contexto permitido
+    await userEvent.type(screen.getByLabelText(/Descreva a tarefa/i), 'documentar o projeto')
+    await userEvent.click(screen.getByRole('button', { name: /executar de verdade/i }))
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'codex',
+        contextRefs: [{ relPath: 'src/a.ts', kind: 'file' }]
+      })
+    )
+  })
+
+  it('remover contexto antes de iniciar tira o item da lista', async () => {
+    const pick = vi
+      .fn()
+      .mockResolvedValue({ status: 'ok', ref: { relPath: 'src/a.ts', kind: 'file' } })
+    renderCodexComposer(pick)
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
+    expect(await screen.findByText(/@arquivo src\/a\.ts/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Remover src\/a\.ts/i }))
+    expect(screen.queryByText(/@arquivo src\/a\.ts/)).not.toBeInTheDocument()
+  })
+})
+
+describe('RunResultPanel — resultado auditável (Fase 2B.1)', () => {
+  const baseResult: RunResult = {
+    provider: 'codex_cli',
+    cliVersion: 'codex-cli 0.144.5',
+    model: null,
+    finalMessage: 'Resposta final completa da IA, com várias linhas.\nSegunda linha.',
+    startedAt: 1000,
+    finishedAt: 4000,
+    exitCode: 0,
+    cancelled: false,
+    preExistingGitChanges: true,
+    changedFiles: [
+      { path: 'LUTHOR_SMOKE.md', status: '??', preExisting: false },
+      { path: 'existing.ts', status: 'M', preExisting: true }
+    ],
+    changedFilesTruncated: false,
+    usage: null
+  }
+
+  function makeRealSnapshot(overrides: Partial<RunResult> = {}): RunSnapshot {
+    const snap = createSeedSnapshot()
+    snap.run.executor = 'codex_cli'
+    snap.run.state = 'completed'
+    snap.result = { ...baseResult, ...overrides }
+    snap.effectiveConfig = {
+      profileId: 'codex-high',
+      profileName: 'codex — padrão da CLI',
+      appliedModel: null,
+      appliedEffort: null,
+      contextRefs: [{ relPath: 'README.md', kind: 'file' }]
+    }
+    return snap
+  }
+
+  it('mostra resposta final completa, metadados e arquivos alterados', () => {
+    render(<RunResultPanel snapshot={makeRealSnapshot()} />)
+    expect(screen.getByText(/Resposta final completa da IA/)).toBeInTheDocument()
+    expect(screen.getByText(/codex-cli 0\.144\.5/)).toBeInTheDocument()
+    expect(screen.getByText(/modelo não informado pela CLI/i)).toBeInTheDocument()
+    expect(screen.getByText('LUTHOR_SMOKE.md')).toBeInTheDocument()
+    expect(screen.getByText('já existia')).toBeInTheDocument() // arquivo pré-existente
+    expect(screen.getByText(/já continha mudanças locais ANTES/i)).toBeInTheDocument()
+  })
+
+  it('uso ausente: "não informado" + link para painel oficial, sem estimar', () => {
+    render(<RunResultPanel snapshot={makeRealSnapshot({ usage: null })} />)
+    expect(screen.getByText(/Uso por run não informado pela CLI/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /painel oficial de uso/i })).toBeInTheDocument()
+  })
+
+  it('uso presente: só os números emitidos pela CLI', () => {
+    render(<RunResultPanel snapshot={makeRealSnapshot({ usage: { input_tokens: 120 } })} />)
+    expect(screen.getByText(/input_tokens: 120/)).toBeInTheDocument()
+  })
+
+  it('sem Git: resumo de arquivos indisponível', () => {
+    render(
+      <RunResultPanel
+        snapshot={makeRealSnapshot({ changedFiles: null, preExistingGitChanges: null })}
+      />
+    )
+    expect(screen.getByText(/sem repositório Git/i)).toBeInTheDocument()
   })
 })
 

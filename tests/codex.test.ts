@@ -13,8 +13,14 @@ import {
   CodexRunManager,
   extractAgentMessage,
   extractModel,
+  extractUsage,
   summarizeCliEvent
 } from '../src/main/services/codex/codex-run-manager'
+import {
+  evaluateContextReference,
+  buildContextInstruction
+} from '../src/main/services/codex/context-references'
+import { codexCapabilities } from '@shared/domain'
 import { TranscriptWriter } from '../src/main/services/codex/transcript'
 import { RunCoordinator } from '../src/main/services/run-coordinator'
 import { SimulationEngine } from '../src/main/services/simulation/simulation-engine'
@@ -54,7 +60,9 @@ const CAPS = {
   sandboxWorkspaceWrite: true,
   cd: true,
   skipGitRepoCheck: true,
-  colorNever: true
+  colorNever: true,
+  modelFlag: true,
+  imageFlag: true
 }
 
 const READY_STATUS: CodexStatus = {
@@ -187,7 +195,7 @@ describe('CodexDetector — nada é assumido sobre a CLI', () => {
       }),
       runCommand: async (_cmd, args) => {
         if (args[0] === 'exec') {
-          return { code: 0, stdout: '--json --sandbox [read-only, workspace-write] --cd --skip-git-repo-check --color never', stderr: '' }
+          return { code: 0, stdout: '--json --sandbox [read-only, workspace-write] --cd --skip-git-repo-check --color never -m, --model -i, --image', stderr: '' }
         }
         if (args[0] === 'login') return { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' }
         return { code: 1, stdout: '', stderr: '' }
@@ -665,6 +673,242 @@ describe('TranscriptWriter — limite de tamanho', () => {
     expect(extractModel({ foo: 1 })).toBeNull()
     expect(extractAgentMessage({ type: 'x' })).toBeNull()
     expect(summarizeCliEvent({ type: 'turn.started' })).toBe('[turn.started]')
+  })
+})
+
+// ── Fase 2B.1: capacidades honestas ─────────────────────────────────────────
+
+describe('codexCapabilities — honesto, sem inventar modelos', () => {
+  it('flags detectadas: modelo configurável mas SEM lista; esforço não configurável', () => {
+    const caps = codexCapabilities({
+      available: true,
+      flags: {
+        jsonOutput: true,
+        sandboxWorkspaceWrite: true,
+        cd: true,
+        modelFlag: true,
+        imageFlag: true
+      }
+    })
+    expect(caps.availableModels).toEqual([]) // nunca inventar GPT-5.5/5.6/…
+    expect(caps.modelConfigurable).toBe(true)
+    expect(caps.availableEffortLevels).toEqual([])
+    expect(caps.effortConfigurable).toBe(false)
+    expect(caps.supportsFileReferences).toBe(true)
+    expect(caps.supportsImages).toBe(false) // flag existe mas não implementado
+    expect(caps.imageFlagDetected).toBe(true)
+    expect(caps.supportsInteractiveQuestions).toBe(false)
+    expect(caps.usageDashboardUrl).toMatch(/openai/)
+  })
+
+  it('uso só é suportado depois de observado de verdade', () => {
+    expect(codexCapabilities({ available: true, flags: null }).supportsUsageReporting).toBe(false)
+    expect(
+      codexCapabilities({ available: true, flags: null, usageObservedOnce: true })
+        .supportsUsageReporting
+    ).toBe(true)
+  })
+})
+
+// ── Fase 2B.1: referências de contexto seguras ──────────────────────────────
+
+describe('evaluateContextReference — denylist e limites', () => {
+  const WS = 'C:\\proj\\app'
+  const base = { workspacePath: WS, isDirectory: false, sizeBytes: 100 }
+
+  it('arquivo permitido dentro do workspace → caminho relativo POSIX', () => {
+    const r = evaluateContextReference({ ...base, selectedPath: 'C:\\proj\\app\\src\\a.ts', kind: 'file' })
+    expect(r).toEqual({ ok: true, ref: { relPath: 'src/a.ts', kind: 'file' } })
+  })
+
+  it('fora do workspace é bloqueado', () => {
+    const r = evaluateContextReference({ ...base, selectedPath: 'C:\\outro\\x.ts', kind: 'file' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.code).toBe('outside_workspace')
+  })
+
+  it('.env / chaves / node_modules / .git bloqueados', () => {
+    const denied = [
+      'C:\\proj\\app\\.env',
+      'C:\\proj\\app\\config\\server.key',
+      'C:\\proj\\app\\node_modules\\lib\\index.js',
+      'C:\\proj\\app\\.git\\config'
+    ]
+    for (const p of denied) {
+      const r = evaluateContextReference({ ...base, selectedPath: p, kind: 'file' })
+      expect(r.ok, p).toBe(false)
+      if (!r.ok) expect(r.code).toBe('denied_name')
+    }
+  })
+
+  it('binário e arquivo muito grande bloqueados', () => {
+    const bin = evaluateContextReference({ ...base, selectedPath: 'C:\\proj\\app\\a.png', kind: 'file' })
+    expect(bin.ok).toBe(false)
+    if (!bin.ok) expect(bin.code).toBe('denied_binary')
+
+    const big = evaluateContextReference({
+      ...base,
+      selectedPath: 'C:\\proj\\app\\huge.txt',
+      kind: 'file',
+      sizeBytes: 5 * 1024 * 1024
+    })
+    expect(big.ok).toBe(false)
+    if (!big.ok) expect(big.code).toBe('too_large')
+  })
+
+  it('pasta aceita; incompatibilidade de tipo bloqueia', () => {
+    const folder = evaluateContextReference({
+      ...base,
+      selectedPath: 'C:\\proj\\app\\src',
+      kind: 'folder',
+      isDirectory: true
+    })
+    expect(folder).toEqual({ ok: true, ref: { relPath: 'src', kind: 'folder' } })
+
+    const mismatch = evaluateContextReference({
+      ...base,
+      selectedPath: 'C:\\proj\\app\\src',
+      kind: 'file',
+      isDirectory: true
+    })
+    expect(mismatch.ok).toBe(false)
+    if (!mismatch.ok) expect(mismatch.code).toBe('kind_mismatch')
+  })
+
+  it('instrução de contexto lista caminhos relativos claros', () => {
+    const text = buildContextInstruction([
+      { relPath: 'src/a.ts', kind: 'file' },
+      { relPath: 'docs', kind: 'folder' }
+    ])
+    expect(text).toContain('@arquivo src/a.ts')
+    expect(text).toContain('@pasta docs')
+    expect(buildContextInstruction([])).toBe('')
+  })
+})
+
+// ── Fase 2B.1: resultado, uso e resumo Git ──────────────────────────────────
+
+describe('CodexRunManager — resultado auditável', () => {
+  it('resultado completo: resposta final NÃO truncada, config efetiva, contexto no prompt', async () => {
+    const proc = new FakeProcess()
+    const spawnedArgs: string[][] = []
+    const dir = mkdtempSync(join(tmpdir(), 'luthor-res-'))
+    const runner = new CodexRunner({ spawnFn: (_c, args) => { spawnedArgs.push(args); return proc } })
+    const manager = new CodexRunManager({
+      emit: () => {},
+      dataDir: dir,
+      runner,
+      runCommand: fakeGit(false)
+    })
+    await manager.start({
+      text: 'Documente o projeto',
+      workspace,
+      cliStatus: READY_STATUS,
+      profileName: 'codex — padrão da CLI',
+      contextRefs: [{ relPath: 'README.md', kind: 'file' }]
+    })
+    // contexto entrou no prompt enviado à CLI (último argumento).
+    expect(spawnedArgs[0].at(-1)).toContain('@arquivo README.md')
+
+    const longMessage = 'linha '.repeat(400) // > 400 chars: não pode truncar no resultado
+    proc.pushStdout(`{"type":"item.completed","item":{"type":"agent_message","text":"${longMessage.trim()}"}}\n`)
+    proc.exit(0)
+    await manager.flush()
+
+    const snap = manager.getSnapshot()!
+    expect(snap.result).not.toBeNull()
+    expect(snap.result!.finalMessage!.length).toBe(longMessage.trim().length)
+    expect(snap.result!.provider).toBe('codex_cli')
+    expect(snap.result!.cliVersion).toBe('codex-cli 0.144.5')
+    expect(snap.result!.exitCode).toBe(0)
+    expect(snap.effectiveConfig!.appliedModel).toBeNull() // sem modelo escolhido = padrão
+    expect(snap.effectiveConfig!.contextRefs).toEqual([{ relPath: 'README.md', kind: 'file' }])
+  })
+
+  it('uso ausente: result.usage null (a UI mostra "não informado")', async () => {
+    const { manager, proc } = createManager()
+    await manager.start({ text: 'Tarefa', workspace, cliStatus: READY_STATUS })
+    proc.pushStdout('{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n')
+    proc.exit(0)
+    await manager.flush()
+    expect(manager.getSnapshot()!.result!.usage).toBeNull()
+  })
+
+  it('uso presente: só números estruturados emitidos pela CLI', async () => {
+    const observed: boolean[] = []
+    const dir = mkdtempSync(join(tmpdir(), 'luthor-usage-'))
+    const proc = new FakeProcess()
+    const runner = new CodexRunner({ spawnFn: () => proc })
+    const manager = new CodexRunManager({
+      emit: () => {},
+      dataDir: dir,
+      runner,
+      runCommand: fakeGit(false),
+      onUsageObserved: () => observed.push(true)
+    })
+    await manager.start({ text: 'Tarefa', workspace, cliStatus: READY_STATUS })
+    proc.pushStdout('{"type":"turn.completed","usage":{"input_tokens":120,"output_tokens":45}}\n')
+    proc.exit(0)
+    await manager.flush()
+    expect(manager.getSnapshot()!.result!.usage).toEqual({ input_tokens: 120, output_tokens: 45 })
+    expect(observed.length).toBeGreaterThan(0)
+  })
+
+  it('extractUsage: null sem objeto de uso; números quando presentes', () => {
+    expect(extractUsage({ type: 'x' })).toBeNull()
+    expect(extractUsage({ usage: { total_tokens: 10, note: 'x' } })).toEqual({ total_tokens: 10 })
+  })
+
+  it('resumo Git de leitura: novos arquivos vs. pré-existentes', async () => {
+    // git status muda entre pré-run (limpo) e pós-run (um arquivo criado).
+    const proc = new FakeProcess()
+    const dir = mkdtempSync(join(tmpdir(), 'luthor-git-'))
+    let statusCall = 0
+    const runner = new CodexRunner({ spawnFn: () => proc })
+    const manager = new CodexRunManager({
+      emit: () => {},
+      dataDir: dir,
+      runner,
+      runCommand: async (_cmd, args) => {
+        if (args.includes('rev-parse')) return { code: 0, stdout: 'true\n', stderr: '' }
+        if (args.includes('status')) {
+          statusCall++
+          // pré-run: já existe UM arquivo modificado; pós-run: + novo arquivo.
+          return statusCall === 1
+            ? { code: 0, stdout: ' M existing.ts\n', stderr: '' }
+            : { code: 0, stdout: ' M existing.ts\n?? LUTHOR_SMOKE.md\n', stderr: '' }
+        }
+        return { code: 1, stdout: '', stderr: '' }
+      }
+    })
+    await manager.start({ text: 'Criar arquivo', workspace, cliStatus: READY_STATUS })
+    proc.exit(0)
+    await manager.flush()
+
+    const changed = manager.getSnapshot()!.result!.changedFiles!
+    const created = changed.find((f) => f.path === 'LUTHOR_SMOKE.md')
+    const pre = changed.find((f) => f.path === 'existing.ts')
+    expect(created?.preExisting).toBe(false)
+    expect(pre?.preExisting).toBe(true)
+    expect(manager.getSnapshot()!.result!.preExistingGitChanges).toBe(true)
+  })
+
+  it('sem Git: changedFiles null e preExistingGitChanges null', async () => {
+    const proc = new FakeProcess()
+    const dir = mkdtempSync(join(tmpdir(), 'luthor-nogit-'))
+    const runner = new CodexRunner({ spawnFn: () => proc })
+    const manager = new CodexRunManager({
+      emit: () => {},
+      dataDir: dir,
+      runner,
+      runCommand: async () => ({ code: 1, stdout: '', stderr: 'not a repo' })
+    })
+    await manager.start({ text: 'Tarefa', workspace, cliStatus: READY_STATUS })
+    proc.exit(0)
+    await manager.flush()
+    const result = manager.getSnapshot()!.result!
+    expect(result.changedFiles).toBeNull()
+    expect(result.preExistingGitChanges).toBeNull()
   })
 })
 
