@@ -62,7 +62,9 @@ const api: LuthorApi = {
   codex: {
     capabilities: () => ipcRenderer.invoke(IpcChannels.codexCapabilities),
     pickContext: (kind: 'file' | 'folder') =>
-      ipcRenderer.invoke(IpcChannels.codexPickContext, { kind })
+      ipcRenderer.invoke(IpcChannels.codexPickContext, { kind }),
+    suggestContext: (query: string) =>
+      ipcRenderer.invoke(IpcChannels.codexSuggestContext, { query })
   }
 }
 

@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { ProviderCapabilities } from '@shared/domain'
 import {
   AGENT_ROLE_LABELS,
   AGENT_STATE_LABELS,
@@ -15,18 +16,34 @@ import {
   formatElapsed
 } from '@renderer/lib/state-ui'
 import { PixelBadge } from '@renderer/components/ui/PixelBadge'
+import { PixelButton } from '@renderer/components/ui/PixelButton'
 import { PixelTabs } from '@renderer/components/ui/PixelTabs'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
 import { StepProgress } from '@renderer/components/ui/StepProgress'
 import { RunResultPanel } from '@renderer/components/office/RunResultPanel'
+import { ComposerModal } from '@renderer/components/office/ComposerModal'
 
 /** Detalhe do Run: resultado (real), plano, agentes, logs, checkpoints e perguntas. */
 export function RunDetailPage(): React.JSX.Element {
-  const { snapshot } = useRunStore()
+  const { snapshot, startNewTask } = useRunStore()
   const realRun = snapshot?.run.executor === 'codex_cli'
   const [tab, setTab] = useState(realRun ? 'result' : 'plan')
   const [logFilter, setLogFilter] = useState('')
+  const [composerOpen, setComposerOpen] = useState(false)
+  const [codexAvailability, setCodexAvailability] = useState<{ ok: boolean; reason?: string }>({
+    ok: false,
+    reason: 'verificando a CLI do Codex…'
+  })
+  const [codexCapabilities, setCodexCapabilities] = useState<ProviderCapabilities | null>(null)
   const now = useNow(1000)
+
+  useEffect(() => {
+    void window.luthor?.connections.list().then((list) => {
+      const codex = list.find((c) => c.id === 'codex')
+      if (codex) setCodexAvailability({ ok: codex.status === 'configured', reason: codex.detail })
+    })
+    void window.luthor?.codex?.capabilities().then(setCodexCapabilities)
+  }, [])
 
   if (!snapshot) {
     return (
@@ -52,10 +69,32 @@ export function RunDetailPage(): React.JSX.Element {
           ) : (
             <span className="text-warn text-xs">dados simulados</span>
           )}
+          {/* "Nova tarefa" sempre disponível — cria um NOVO run, não mexe neste. */}
+          <PixelButton variant="orch" className="ml-auto" onClick={() => setComposerOpen(true)}>
+            Nova tarefa
+          </PixelButton>
         </div>
         <p className="text-sm text-ink">{snapshot.task.title}</p>
-        {!realRun && <StepProgress steps={snapshot.steps} />}
+        {/* Barra de etapas verificadas SÓ com plano real com etapas. */}
+        {snapshot.steps.length > 0 && <StepProgress steps={snapshot.steps} />}
       </header>
+
+      {composerOpen && (
+        <ComposerModal
+          kind="new_task"
+          agents={snapshot.agents}
+          continuedFromRunId={snapshot.run.id}
+          codexAvailability={codexAvailability}
+          codexCapabilities={codexCapabilities}
+          onPickContext={(k) =>
+            window.luthor?.codex?.pickContext(k) ?? Promise.resolve({ status: 'cancelled' as const })
+          }
+          onSuggestContext={(q) => window.luthor?.codex?.suggestContext(q) ?? Promise.resolve([])}
+          onClose={() => setComposerOpen(false)}
+          onSubmitNewTask={(input) => void startNewTask(input)}
+          onSubmitInstruction={() => {}}
+        />
+      )}
 
       <PixelTabs
         active={tab}
@@ -70,42 +109,49 @@ export function RunDetailPage(): React.JSX.Element {
                 }
               ]
             : []),
-          {
-            id: 'plan',
-            label: 'Plano',
-            content: (
-              <ol className="space-y-2">
-                {[...snapshot.steps]
-                  .sort((a, b) => a.index - b.index)
-                  .map((step) => {
-                    const style = STEP_STATUS_STYLE[step.status]
-                    const agent = snapshot.agents.find((a) => a.id === step.assignedAgentId)
-                    return (
-                      <li
-                        key={step.id}
-                        className="pixel-frame flex items-center justify-between gap-3 px-4 py-2 [--px-border:var(--color-night-500)]"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="font-pixel text-xs text-ink-faint">{step.index}</span>
-                          <span className="text-sm text-ink">{step.title}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {agent && (
-                            <span className="text-[11px] text-ink-faint">
-                              {AGENT_ROLE_LABELS[agent.role]}
-                            </span>
-                          )}
-                          <PixelBadge className={`${style.bg} ${style.text}`}>
-                            <StatusDot colorClass={style.dot} animClass={style.anim} />
-                            {STEP_STATUS_LABELS[step.status]}
-                          </PixelBadge>
-                        </div>
-                      </li>
-                    )
-                  })}
-              </ol>
-            )
-          },
+          // Aba Plano só existe quando há um plano REAL com etapas (sem "0 de 0").
+          ...(snapshot.steps.length > 0
+            ? [
+                {
+                  id: 'plan',
+                  label: 'Plano',
+                  content: (
+                    <ol className="space-y-2">
+                      {[...snapshot.steps]
+                        .sort((a, b) => a.index - b.index)
+                        .map((step) => {
+                          const style = STEP_STATUS_STYLE[step.status]
+                          const agent = snapshot.agents.find((a) => a.id === step.assignedAgentId)
+                          return (
+                            <li
+                              key={step.id}
+                              className="pixel-frame flex items-center justify-between gap-3 px-4 py-2 [--px-border:var(--color-night-500)]"
+                            >
+                              <div className="flex items-center gap-3">
+                                <span className="font-pixel text-xs text-ink-faint">
+                                  {step.index}
+                                </span>
+                                <span className="text-sm text-ink">{step.title}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {agent && (
+                                  <span className="text-[11px] text-ink-faint">
+                                    {AGENT_ROLE_LABELS[agent.role]}
+                                  </span>
+                                )}
+                                <PixelBadge className={`${style.bg} ${style.text}`}>
+                                  <StatusDot colorClass={style.dot} animClass={style.anim} />
+                                  {STEP_STATUS_LABELS[step.status]}
+                                </PixelBadge>
+                              </div>
+                            </li>
+                          )
+                        })}
+                    </ol>
+                  )
+                }
+              ]
+            : []),
           {
             id: 'agents',
             label: 'Agentes',

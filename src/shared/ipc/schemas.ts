@@ -77,6 +77,12 @@ export type NewTaskInput = z.infer<typeof NewTaskInputSchema>
 export const PickContextInputSchema = z.object({ kind: z.enum(['file', 'folder']) }).strict()
 export type PickContextInput = z.infer<typeof PickContextInputSchema>
 
+/** Consulta do autocomplete `@` (prefixo relativo ao workspace). */
+export const SuggestContextInputSchema = z
+  .object({ query: z.string().max(256) })
+  .strict()
+export type SuggestContextInput = z.infer<typeof SuggestContextInputSchema>
+
 const ProfileFieldsSchema = z.object({
   name: z.string().min(1).max(60),
   provider: ProviderKindSchema,

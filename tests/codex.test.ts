@@ -20,7 +20,7 @@ import {
   evaluateContextReference,
   buildContextInstruction
 } from '../src/main/services/codex/context-references'
-import { codexCapabilities } from '@shared/domain'
+import { codexCapabilities, durationMs, executionSummary, parseNeedsInput } from '@shared/domain'
 import { TranscriptWriter } from '../src/main/services/codex/transcript'
 import { RunCoordinator } from '../src/main/services/run-coordinator'
 import { SimulationEngine } from '../src/main/services/simulation/simulation-engine'
@@ -453,7 +453,9 @@ describe('CodexRunManager — run real na Agent Office', () => {
     expect(snapshot.run.executor).toBe('codex_cli')
     expect(snapshot.run.state).toBe('running')
     expect(snapshot.agents).toHaveLength(1)
-    expect(snapshot.agents[0]).toMatchObject({ name: 'Codex', profileId: 'codex-high' })
+    // Config honesta: nome/perfil efetivos, nunca "codex-high"/"high".
+    expect(snapshot.agents[0]).toMatchObject({ name: 'Worker Codex', profileId: 'codex-cli' })
+    expect(snapshot.agents[0].effort).not.toBe('high')
     expect(snapshot.steps).toHaveLength(0) // nunca inventar progresso
     expect(manager.isBusy()).toBe(true)
   })
@@ -909,6 +911,100 @@ describe('CodexRunManager — resultado auditável', () => {
     const result = manager.getSnapshot()!.result!
     expect(result.changedFiles).toBeNull()
     expect(result.preExistingGitChanges).toBeNull()
+  })
+})
+
+// ── Fase 2B.1 (rodada UX): duração, pergunta estruturada, continuação ────────
+
+describe('durationMs / executionSummary / parseNeedsInput', () => {
+  it('duração congela em terminal; corre enquanto ativo', () => {
+    // Terminal: usa finishedAt, ignora "now".
+    expect(durationMs(1000, 4000, true, 999999)).toBe(3000)
+    // Ativo: usa now.
+    expect(durationMs(1000, null, false, 6000)).toBe(5000)
+    // Terminal sem finishedAt (defensivo): cai para now.
+    expect(durationMs(1000, null, true, 6000)).toBe(5000)
+  })
+
+  it('executionSummary honesto por estados', () => {
+    const mk = (state: string) => ({ state }) as unknown as Parameters<typeof executionSummary>[0][number]
+    const s = executionSummary([mk('executing'), mk('question_pending'), mk('completed'), mk('failed')])
+    expect(s).toEqual({ running: 1, awaiting: 1, completed: 1, failed: 1 })
+  })
+
+  it('parseNeedsInput só aceita o marcador explícito, não heurística', () => {
+    expect(parseNeedsInput('Isto parece uma pergunta?')).toBeNull()
+    const parsed = parseNeedsInput(
+      'Preciso saber. @@LUTHOR_NEEDS_INPUT@@ {"question":"Qual arquivo?","options":["README.md","src/x.ts"]}'
+    )
+    expect(parsed?.question).toBe('Qual arquivo?')
+    expect(parsed?.options).toEqual(['README.md', 'src/x.ts'])
+  })
+})
+
+describe('CodexRunManager — pergunta estruturada e continuação (Fase 2B.1)', () => {
+  /** Harness que entrega um FakeProcess NOVO a cada spawn (para continuação). */
+  function createSeqManager(gitDirty = false) {
+    const procs: FakeProcess[] = []
+    const dir = mkdtempSync(join(tmpdir(), 'luthor-seq-'))
+    const runner = new CodexRunner({
+      spawnFn: () => {
+        const p = new FakeProcess()
+        procs.push(p)
+        return p
+      }
+    })
+    const manager = new CodexRunManager({
+      emit: () => {},
+      dataDir: dir,
+      runner,
+      runCommand: fakeGit(gitDirty)
+    })
+    return { manager, procs }
+  }
+
+  it('marcador estruturado → awaiting_user (nunca completed) + pergunta na Caixa', async () => {
+    const { manager, procs } = createSeqManager()
+    await manager.start({ text: 'Adicionar 2 linhas', workspace, cliStatus: READY_STATUS })
+    procs[0].pushStdout(
+      '{"type":"item.completed","item":{"type":"agent_message","text":"@@LUTHOR_NEEDS_INPUT@@ {\\"question\\":\\"Em qual arquivo?\\",\\"options\\":[\\"README.md\\"]}"}}\n'
+    )
+    procs[0].exit(0)
+    await manager.flush()
+
+    const snap = manager.getSnapshot()!
+    expect(snap.run.state).toBe('awaiting_user')
+    expect(snap.run.state).not.toBe('completed')
+    expect(snap.result).toBeNull() // sem falsa conclusão
+    expect(snap.agents[0].state).toBe('question_pending')
+    const q = snap.questions.find((x) => x.status === 'pending')
+    expect(q?.text).toBe('Em qual arquivo?')
+    expect(q?.options.map((o) => o.label)).toEqual(['README.md'])
+    expect(q?.allowFreeText).toBe(true)
+    // Evento honesto: o processo encerrou, não está "pausado em memória".
+    expect(snap.events.some((e) => /ENCERROU aguardando/i.test(e.message))).toBe(true)
+  })
+
+  it('responder inicia uma continuação auditável real (nova execução), sem resume da CLI', async () => {
+    const { manager, procs } = createSeqManager()
+    await manager.start({ text: 'Adicionar 2 linhas', workspace, cliStatus: READY_STATUS })
+    procs[0].pushStdout(
+      '{"type":"item.completed","item":{"type":"agent_message","text":"@@LUTHOR_NEEDS_INPUT@@ {\\"question\\":\\"Em qual arquivo?\\"}"}}\n'
+    )
+    procs[0].exit(0)
+    await manager.flush()
+
+    const cont = await manager.answerAndContinue('No README.md, adicionar 2 linhas de intro')
+    expect(cont).not.toBeNull()
+    // Novo run real em andamento (não uma conclusão do anterior).
+    expect(cont!.run.executor).toBe('codex_cli')
+    expect(cont!.run.state).toBe('running')
+    expect(manager.isBusy()).toBe(true)
+    // Um segundo processo foi spawnado (continuação), não "resume".
+    expect(procs.length).toBe(2)
+    // O prompt da continuação carrega tarefa original + resposta.
+    expect(cont!.events.some((e) => /continuação/i.test(e.message))).toBe(true)
+    expect(cont!.effectiveConfig?.profileName).toContain('Codex CLI')
   })
 })
 

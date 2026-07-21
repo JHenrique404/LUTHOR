@@ -58,14 +58,32 @@ export const STEP_STATUS_STYLE: Record<StepStatus, StateStyle> = {
   failed: { text: 'text-alert', bg: 'bg-alert-soft', dot: 'bg-alert', anim: '' }
 }
 
-export function formatElapsed(sinceMs: number, now = Date.now()): string {
-  const total = Math.max(0, Math.floor((now - sinceMs) / 1000))
+function formatSeconds(totalMs: number): string {
+  const total = Math.max(0, Math.floor(totalMs / 1000))
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
   const s = total % 60
   if (h > 0) return `${h}h${String(m).padStart(2, '0')}m`
   if (m > 0) return `${m}m${String(s).padStart(2, '0')}s`
   return `${s}s`
+}
+
+export function formatElapsed(sinceMs: number, now = Date.now()): string {
+  return formatSeconds(now - sinceMs)
+}
+
+/**
+ * Duração honesta: congelada (finishedAt-startedAt) quando terminal; ao vivo
+ * (now-startedAt) enquanto ativo. Nunca usa "agora" para item terminal.
+ */
+export function formatDuration(
+  startedAt: number,
+  finishedAt: number | null,
+  isTerminal: boolean,
+  now = Date.now()
+): string {
+  if (isTerminal && finishedAt !== null) return formatSeconds(finishedAt - startedAt)
+  return formatSeconds(now - startedAt)
 }
 
 export function formatClock(at: number): string {

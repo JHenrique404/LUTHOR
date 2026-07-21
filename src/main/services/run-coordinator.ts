@@ -110,14 +110,30 @@ export class RunCoordinator {
     return this.sim.resumeAgent(agentId)
   }
 
-  answerQuestion(input: AnswerQuestionInput): RunSnapshot {
-    if (this.codexActive()) return this.getSnapshot()
+  async answerQuestion(input: AnswerQuestionInput): Promise<RunSnapshot> {
+    if (this.codexActive()) return this.answerRealRun([input])
     return this.sim.answerQuestion(input)
   }
 
-  answerQuestions(inputs: AnswerQuestionInput[]): RunSnapshot {
-    if (this.codexActive()) return this.getSnapshot()
+  async answerQuestions(inputs: AnswerQuestionInput[]): Promise<RunSnapshot> {
+    if (this.codexActive()) return this.answerRealRun(inputs)
     return this.sim.answerQuestions(inputs)
+  }
+
+  /**
+   * Run REAL aguardando resposta: a resposta inicia uma CONTINUAÇÃO auditável
+   * (nova execução real), não uma "conclusão" silenciosa nem um resume fingido.
+   */
+  private async answerRealRun(inputs: AnswerQuestionInput[]): Promise<RunSnapshot> {
+    const snapshot = this.codex.getSnapshot()
+    if (!snapshot || snapshot.run.state !== 'awaiting_user') return this.getSnapshot()
+    const pending = snapshot.questions.find((q) => q.status === 'pending')
+    const input = inputs.find((i) => i.questionId === pending?.id) ?? inputs[0]
+    if (!pending || !input) return this.getSnapshot()
+    const optionLabel = pending.options.find((o) => o.id === input.optionId)?.label
+    const answer = [optionLabel, input.freeText?.trim()].filter(Boolean).join(' — ')
+    if (!answer) return this.getSnapshot()
+    return (await this.codex.answerAndContinue(answer)) ?? this.getSnapshot()
   }
 
   addUserDirection(input: UserDirectionInput): RunSnapshot {

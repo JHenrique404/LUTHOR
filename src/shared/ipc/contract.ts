@@ -54,6 +54,7 @@ export const IpcChannels = {
   codexClearBinary: 'luthor:codex:clear-binary',
   codexCapabilities: 'luthor:codex:capabilities',
   codexPickContext: 'luthor:codex:pick-context',
+  codexSuggestContext: 'luthor:codex:suggest-context',
   /** main -> renderer (webContents.send) */
   simEvent: 'luthor:sim:event'
 } as const
@@ -196,5 +197,10 @@ export interface LuthorApi {
      * caminho RELATIVO. Nenhuma leitura ampla — só stat do item.
      */
     pickContext(kind: 'file' | 'folder'): Promise<PickContextResult>
+    /**
+     * Autocomplete `@`: sugestões dentro do workspace ativo, SOB DEMANDA e
+     * limitadas (um nível de diretório). Só a seleção explícita vira referência.
+     */
+    suggestContext(query: string): Promise<Array<{ relPath: string; kind: 'file' | 'folder' }>>
   }
 }

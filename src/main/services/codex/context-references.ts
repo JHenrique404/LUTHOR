@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs'
-import { isAbsolute, relative, sep, extname, basename } from 'node:path'
+import { isAbsolute, join, relative, sep, extname, basename } from 'node:path'
 
 /**
  * Referências de contexto (@arquivo / @pasta) — Fase 2B.1.
@@ -178,6 +178,63 @@ export async function resolveContextReference(
     isDirectory: stat.isDirectory,
     sizeBytes: stat.sizeBytes
   })
+}
+
+export interface ContextSuggestion {
+  relPath: string
+  kind: ContextRefKind
+}
+
+/** Segmentos de diretório que nunca sugerimos. */
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'out', 'release', '.vite'])
+const MAX_SUGGESTIONS = 20
+
+/**
+ * Sugestões para o autocomplete `@` — SOB DEMANDA e LIMITADAS: lê apenas UM
+ * nível de diretório (o do prefixo digitado), nunca varredura recursiva ampla.
+ * Aplica a mesma denylist; nada aqui vira referência sozinho — só a seleção
+ * explícita do usuário (via este autocomplete ou o diálogo nativo).
+ */
+export async function suggestContextReferences(
+  workspacePath: string,
+  query: string,
+  fsAdapter: ContextFs = defaultContextFs
+): Promise<ContextSuggestion[]> {
+  // Divide o prefixo em "dir/leaf": o dir é lido; o leaf filtra.
+  const normalized = query.replace(/\\/g, '/').replace(/^\/+/, '')
+  if (normalized.includes('..')) return []
+  const slash = normalized.lastIndexOf('/')
+  const dirRel = slash >= 0 ? normalized.slice(0, slash) : ''
+  const leaf = (slash >= 0 ? normalized.slice(slash + 1) : normalized).toLowerCase()
+
+  const canonicalWorkspace = await fsAdapter.realpath(workspacePath).catch(() => workspacePath)
+  const dirAbs = dirRel ? join(canonicalWorkspace, ...dirRel.split('/')) : canonicalWorkspace
+  // Confirma que o diretório-alvo ainda está dentro do workspace.
+  const relCheck = relative(canonicalWorkspace, dirAbs)
+  if (relCheck.startsWith('..') || isAbsolute(relCheck)) return []
+
+  let entries: { name: string; isDir: boolean }[]
+  try {
+    const raw = await fs.readdir(dirAbs, { withFileTypes: true })
+    entries = raw.map((e) => ({ name: e.name, isDir: e.isDirectory() }))
+  } catch {
+    return []
+  }
+
+  const out: ContextSuggestion[] = []
+  for (const entry of entries) {
+    if (out.length >= MAX_SUGGESTIONS) break
+    if (entry.isDir && SKIP_DIRS.has(entry.name.toLowerCase())) continue
+    if (leaf && !entry.name.toLowerCase().startsWith(leaf)) continue
+    if (DENIED_NAME_PATTERNS.some((re) => re.test(entry.name))) continue
+    if (!entry.isDir && DENIED_BINARY_EXT.has(extname(entry.name).toLowerCase())) continue
+    const relPath = toRelPosix(dirRel ? `${dirRel}/${entry.name}` : entry.name)
+    out.push({ relPath, kind: entry.isDir ? 'folder' : 'file' })
+  }
+  // Pastas primeiro, depois arquivos, ambos alfabéticos.
+  return out.sort((a, b) =>
+    a.kind !== b.kind ? (a.kind === 'folder' ? -1 : 1) : a.relPath.localeCompare(b.relPath)
+  )
 }
 
 /** Monta a instrução clara de contexto anexada ao prompt do executor. */

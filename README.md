@@ -59,6 +59,33 @@ delegados (Frontend, Backend, Pesquisador, Verificador) em uma "Agent Office" pi
 - **Imagens**: a flag pode existir, mas o envio **não é suportado** nesta fase —
   o composer avisa em vez de aceitar e descartar silenciosamente.
 
+## Refinamento de UX do executor real (rodada 2B.1b)
+
+- **Conclusão no Agent Office** (`RunCompletionPanel`): em run real terminal, um
+  painel compacto abaixo do orquestrador mostra estado, **duração congelada**,
+  o começo da resposta (truncado), "Ver resultado completo" e "Nova tarefa". A
+  aba Resultado continua sendo a fonte auditável completa.
+- **Nova tarefa no detalhe do Run**: botão no header (mesmo em estado terminal)
+  cria um novo run; "Continuar a partir deste run" é só prefill conceitual.
+- **Duração honesta** (domínio `finishedAt` em Agent/Run + `durationMs`):
+  congela ao concluir/falhar/cancelar; nunca usa "agora" para item terminal.
+- **Orquestrador LUTHOR vs Worker Codex** (`LuthorOrchestratorPanel`): camada
+  local "sem IA própria nesta fase" + progresso de execução honesto
+  (`1 execução em andamento/concluída/aguardando`), nunca "0 de 0 etapas". O
+  card do worker mostra só a **configuração efetiva** (`Codex CLI · padrão da
+  CLI`), nunca `codex-high`/`high`.
+- **Composer**: resumo explícito (Executor: Codex CLI · Modelo: padrão da CLI ·
+  Esforço: não configurável) + nota "Fase 2C"; autocomplete `@` sob demanda,
+  atalhos `/arquivo` e `/pasta` (locais, não comandos do provider); imagem com
+  controle desabilitado e aviso ao colar/arrastar.
+- **Pergunta estruturada → `awaiting_user`** (marcador `@@LUTHOR_NEEDS_INPUT@@`):
+  o run real NÃO conclui silenciosamente pedindo esclarecimento — vira
+  `awaiting_user`, o worker fica "Aguardando sua resposta" e a Caixa de Decisões
+  abre a pergunta. Responder inicia uma **continuação auditável real** (nova
+  execução com tarefa original + resposta + contexto limitado), sem depender de
+  `resume` não verificado da CLI. Runs antigos com pergunta não estruturada têm
+  "Responder e continuar deste resultado" (prefill, sem retomar o processo).
+
 ## Stack
 
 - **Electron + TypeScript + React + Vite** (via [electron-vite](https://electron-vite.org))

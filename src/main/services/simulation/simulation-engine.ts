@@ -8,6 +8,7 @@ import type {
   RunState,
   Workspace
 } from '@shared/domain'
+import { isAgentTerminal } from '@shared/domain'
 import { assertTransition, isTerminal } from '@shared/state-machine/run-state'
 import type {
   AnswerQuestionInput,
@@ -683,6 +684,19 @@ export class SimulationEngine {
         agent.lastEventMessage = message
       }
     }
+    this.freezeTerminalTimestamps(event.at)
     this.emitPayload({ event, snapshot: this.getSnapshot() })
+  }
+
+  /**
+   * Congela finishedAt de instâncias/run que atingiram estado terminal —
+   * a duração para de correr. Corrige o bug do tempo que continuava contando.
+   */
+  private freezeTerminalTimestamps(at: number): void {
+    for (const agent of this.snapshot.agents) {
+      if (isAgentTerminal(agent.state) && agent.finishedAt === null) agent.finishedAt = at
+    }
+    const runTerminal = isTerminal(this.snapshot.run.state)
+    if (runTerminal && this.snapshot.run.finishedAt === null) this.snapshot.run.finishedAt = at
   }
 }

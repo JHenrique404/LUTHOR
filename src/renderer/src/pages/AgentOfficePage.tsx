@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { Agent, ProviderCapabilities } from '@shared/domain'
 import { RUN_STATE_LABELS, verifiedProgress } from '@shared/domain'
 import { isTerminal } from '@shared/state-machine/run-state'
@@ -10,6 +11,8 @@ import { PixelButton } from '@renderer/components/ui/PixelButton'
 import { PixelPanel } from '@renderer/components/ui/PixelPanel'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
 import { OrchestratorDesk } from '@renderer/components/office/OrchestratorDesk'
+import { LuthorOrchestratorPanel } from '@renderer/components/office/LuthorOrchestratorPanel'
+import { RunCompletionPanel } from '@renderer/components/office/RunCompletionPanel'
 import { AgentCard } from '@renderer/components/office/AgentCard'
 import { SquadCard } from '@renderer/components/office/SquadCard'
 import { AgentDrawer } from '@renderer/components/office/AgentDrawer'
@@ -21,6 +24,7 @@ import { EventTicker } from '@renderer/components/office/EventTicker'
 interface ComposerState {
   kind: ComposerKind
   continuedFromRunId?: string
+  prefillText?: string
 }
 
 /** Estados em que o run aceita "Direcionar run". */
@@ -41,6 +45,7 @@ export function AgentOfficePage(): React.JSX.Element {
     startNewTask
   } = useRunStore()
   const now = useNow(1000)
+  const navigate = useNavigate()
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [decisionBoxOpen, setDecisionBoxOpen] = useState(false)
   const [decisionInitialId, setDecisionInitialId] = useState<string | null>(null)
@@ -157,32 +162,56 @@ export function AgentOfficePage(): React.JSX.Element {
         </div>
       </header>
 
-      {terminal && (
-        <PixelPanel
-          title="Resumo do run"
-          titleAccent="var(--color-cyan-glow)"
-          frameColor="var(--color-night-500)"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-ink-dim">
-              <span className="text-ink">{snapshot.task.title}</span> —{' '}
-              {RUN_STATE_LABELS[snapshot.run.state].toLowerCase()} com {progress.verified} de{' '}
-              {progress.total} etapas verificadas. As instâncias de agentes permanecem no
-              histórico deste run.
-            </p>
-            <PixelButton
-              variant="orch"
-              onClick={() =>
-                setComposer({ kind: 'new_task', continuedFromRunId: snapshot.run.id })
-              }
-            >
-              Continuar a partir deste run
-            </PixelButton>
-          </div>
-        </PixelPanel>
+      {/* Run REAL: orquestrador LUTHOR (sem IA) com progresso de execução honesto.
+          Run SIMULADO terminal: resumo por etapas verificadas. */}
+      {realRun ? (
+        <LuthorOrchestratorPanel snapshot={snapshot} />
+      ) : (
+        terminal && (
+          <PixelPanel
+            title="Resumo do run"
+            titleAccent="var(--color-cyan-glow)"
+            frameColor="var(--color-night-500)"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-ink-dim">
+                <span className="text-ink">{snapshot.task.title}</span> —{' '}
+                {RUN_STATE_LABELS[snapshot.run.state].toLowerCase()} com {progress.verified} de{' '}
+                {progress.total} etapas verificadas. As instâncias de agentes permanecem no
+                histórico deste run.
+              </p>
+              <PixelButton
+                variant="orch"
+                onClick={() =>
+                  setComposer({ kind: 'new_task', continuedFromRunId: snapshot.run.id })
+                }
+              >
+                Continuar a partir deste run
+              </PixelButton>
+            </div>
+          </PixelPanel>
+        )
       )}
 
-      {orchestrator && (
+      {/* Painel compacto de conclusão do run real (abaixo do orquestrador). */}
+      {realRun && terminal && (
+        <RunCompletionPanel
+          snapshot={snapshot}
+          onViewResult={() => navigate('/run')}
+          onNewTask={() => setComposer({ kind: 'new_task' })}
+          onAnswerAndContinue={() =>
+            setComposer({
+              kind: 'new_task',
+              continuedFromRunId: snapshot.run.id,
+              prefillText: snapshot.result?.finalMessage
+                ? `Responder à pergunta do run anterior:\n${snapshot.result.finalMessage}\n\nMinha resposta: `
+                : undefined
+            })
+          }
+        />
+      )}
+
+      {!realRun && orchestrator && (
         <OrchestratorDesk
           orchestrator={orchestrator}
           profile={snapshot.profiles.find((p) => p.id === orchestrator.profileId)}
@@ -212,6 +241,7 @@ export function AgentOfficePage(): React.JSX.Element {
             pendingQuestion={pendingQuestions.find((q) => q.agentId === agent.id)}
             lastEvent={lastEvent}
             now={now}
+            effectiveConfigLabel={realRun ? snapshot.effectiveConfig?.profileName : undefined}
             onSelect={setSelectedAgentId}
             onOpenQuestion={(questionId) => openDecisionBox(questionId)}
           />
@@ -245,11 +275,13 @@ export function AgentOfficePage(): React.JSX.Element {
           kind={composer.kind}
           agents={snapshot.agents}
           continuedFromRunId={composer.continuedFromRunId}
+          prefillText={composer.prefillText}
           codexAvailability={codexAvailability}
           codexCapabilities={codexCapabilities}
           onPickContext={(k) =>
             window.luthor?.codex?.pickContext(k) ?? Promise.resolve({ status: 'cancelled' as const })
           }
+          onSuggestContext={(q) => window.luthor?.codex?.suggestContext(q) ?? Promise.resolve([])}
           onClose={() => setComposer(null)}
           onSubmitNewTask={(input) => void startNewTask(input)}
           onSubmitInstruction={(input) => void addUserDirection(input)}

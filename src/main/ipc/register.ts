@@ -8,6 +8,7 @@ import {
   CreateProfileInputSchema,
   NewTaskInputSchema,
   PickContextInputSchema,
+  SuggestContextInputSchema,
   ProfileIdSchema,
   UpdateProfileInputSchema,
   UserDirectionInputSchema,
@@ -20,7 +21,10 @@ import type { SimulationEngine } from '../services/simulation/simulation-engine'
 import type { AgentProvider } from '../services/integrations/agent-provider'
 import type { WorkspaceService } from '../services/workspaces/workspace-service'
 import type { RunCoordinator } from '../services/run-coordinator'
-import { resolveContextReference } from '../services/codex/context-references'
+import {
+  resolveContextReference,
+  suggestContextReferences
+} from '../services/codex/context-references'
 
 /**
  * O main não confia nos tipos do preload/renderer: todo payload IPC
@@ -210,5 +214,12 @@ export function registerIpcHandlers(deps: RegisterIpcDeps): void {
     const evaluation = await resolveContextReference(workspacePath, result.filePaths[0], kind)
     if (!evaluation.ok) return { status: 'blocked', message: evaluation.message }
     return { status: 'ok', ref: evaluation.ref }
+  })
+
+  ipcMain.handle(IpcChannels.codexSuggestContext, async (_e, raw) => {
+    const { query } = parseIpc(SuggestContextInputSchema, raw, IpcChannels.codexSuggestContext)
+    const workspacePath = deps.getActiveWorkspacePath()
+    if (!workspacePath) return []
+    return suggestContextReferences(workspacePath, query)
   })
 }

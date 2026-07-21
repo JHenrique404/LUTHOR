@@ -1,5 +1,17 @@
-import type { ChangedFile, RunEvent, RunEventType, RunResult, RunSnapshot, Workspace } from '@shared/domain'
-import { assertTransition } from '@shared/state-machine/run-state'
+import type {
+  ChangedFile,
+  RunEvent,
+  RunEventType,
+  RunResult,
+  RunSnapshot,
+  Workspace
+} from '@shared/domain'
+import {
+  isAgentTerminal,
+  NEEDS_INPUT_INSTRUCTION,
+  parseNeedsInput
+} from '@shared/domain'
+import { assertTransition, isTerminal } from '@shared/state-machine/run-state'
 import type { SimEventPayload } from '@shared/ipc/contract'
 import type { CodexStatus } from './codex-detector'
 import type { RunnerEvent } from './codex-runner'
@@ -31,6 +43,33 @@ export interface CodexStartInput {
   model?: string | null
   /** Referências de contexto (@arquivo/@pasta), já validadas no main. */
   contextRefs?: ContextRef[]
+  /** Continuação auditável de um run anterior que ficou awaiting_user. */
+  continuationOf?: {
+    originalText: string
+    question: string
+    answer: string
+    /** Contexto necessário da tentativa anterior (limitado, sem segredos). */
+    priorContext: string
+    fromRunId: string
+  }
+}
+
+/** Preâmbulo de continuação: tarefa original + pergunta + resposta do usuário. */
+function buildContinuationPreamble(input: CodexStartInput): string {
+  const c = input.continuationOf
+  if (!c) return ''
+  return [
+    'Continuação de uma execução anterior que ficou aguardando sua decisão.',
+    `Tarefa original: ${c.originalText}`,
+    `Pergunta feita: ${c.question}`,
+    `Resposta do usuário: ${c.answer}`,
+    c.priorContext ? `Contexto necessário da tentativa anterior: ${c.priorContext}` : '',
+    'Prossiga a tarefa original considerando a resposta acima.',
+    '---',
+    ''
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 export interface CodexRunManagerOptions {
@@ -57,7 +96,18 @@ export class CodexRunManager {
   private runSeq = 0
   private model: string | null = null
   private lastAgentMessage: string | null = null
+  /** Todo texto de agent_message acumulado (para achar o marcador estruturado). */
+  private agentTextAll = ''
   private usage: Record<string, number> | null = null
+  /** Guarda o essencial do último start para uma continuação auditável. */
+  private lastStart: {
+    originalText: string
+    workspace: Workspace
+    cliStatus: CodexStatus
+    model: string | null
+    profileName: string
+    contextRefs: ContextRef[]
+  } | null = null
   /** Linhas do `git status --porcelain` ANTES do run (para diferenciar). */
   private preRunStatusLines: Set<string> = new Set()
   private gitAvailable = false
@@ -101,6 +151,17 @@ export class CodexRunManager {
   private isTerminal(): boolean {
     const state = this.snapshot?.run.state
     return state === 'completed' || state === 'failed' || state === 'cancelled'
+  }
+
+  /** Congela finishedAt de instâncias/run terminais — a duração para de correr. */
+  private freezeTerminalTimestamps(at: number): void {
+    if (!this.snapshot) return
+    for (const agent of this.snapshot.agents) {
+      if (isAgentTerminal(agent.state) && agent.finishedAt === null) agent.finishedAt = at
+    }
+    if (isTerminal(this.snapshot.run.state) && this.snapshot.run.finishedAt === null) {
+      this.snapshot.run.finishedAt = at
+    }
   }
 
   /**
@@ -170,6 +231,7 @@ export class CodexRunManager {
 
     this.model = null
     this.lastAgentMessage = null
+    this.agentTextAll = ''
     this.usage = null
     this.eventSeq = 0
     this.gitAvailable = git.isRepo
@@ -186,7 +248,21 @@ export class CodexRunManager {
     const modelConfigurable = input.cliStatus.capabilities.modelFlag
     const appliedModel = modelConfigurable && input.model ? input.model : null
     const contextRefs = input.contextRefs ?? []
-    const promptWithContext = `${title}${buildContextInstruction(contextRefs)}`
+    // Prompt final: tarefa + contexto + protocolo de pergunta estruturada.
+    const promptWithContext =
+      `${input.continuationOf ? buildContinuationPreamble(input) : ''}${title}` +
+      `${buildContextInstruction(contextRefs)}` +
+      `\n${NEEDS_INPUT_INSTRUCTION}`
+
+    // Guarda o essencial para uma CONTINUAÇÃO auditável (nova execução real).
+    this.lastStart = {
+      originalText: input.continuationOf?.originalText ?? title,
+      workspace: input.workspace,
+      cliStatus: input.cliStatus,
+      model: appliedModel,
+      profileName: input.profileName ?? 'Codex CLI · padrão da CLI',
+      contextRefs
+    }
 
     this.snapshot = {
       workspace: structuredClone(input.workspace),
@@ -204,23 +280,27 @@ export class CodexRunManager {
         executor: 'codex_cli',
         cancelRequested: false,
         startedAt: now,
+        finishedAt: null,
         updatedAt: now
       },
-      steps: [],
+      steps: [], // sem PlanStep falso: o Codex não produz um plano de etapas
       agents: [
         {
           id: 'ag-codex',
           runId,
           role: 'worker',
-          name: 'Codex',
-          profileId: input.profileId ?? 'codex-high',
+          name: 'Worker Codex',
+          // Perfil honesto: só o que foi realmente aplicado (não "codex-high").
+          profileId: 'codex-cli',
           squadId: null,
           state: 'executing',
           subtask: title,
-          effort: 'high',
+          // Esforço não é configurável nesta versão detectada → menor (padrão).
+          effort: 'low',
           writeScope: 'writer',
           worktreeRef: null,
           startedAt: now,
+          finishedAt: null,
           lastEventAt: now,
           lastEventMessage: 'Iniciando processo Codex'
         }
@@ -232,8 +312,10 @@ export class CodexRunManager {
       result: null,
       // Configuração EFETIVA (não decorativa): o que foi de fato aplicado.
       effectiveConfig: {
-        profileId: input.profileId ?? 'codex-high',
-        profileName: input.profileName ?? 'codex — padrão da CLI',
+        profileId: 'codex-cli',
+        profileName: appliedModel
+          ? `Codex CLI · modelo ${appliedModel}`
+          : 'Codex CLI · padrão da CLI',
         appliedModel,
         appliedEffort: null,
         contextRefs: contextRefs.map((r) => ({ relPath: r.relPath, kind: r.kind }))
@@ -241,6 +323,13 @@ export class CodexRunManager {
     }
 
     this.pushEvent('task_received', null, `Tarefa real recebida: ${title}`)
+    if (input.continuationOf) {
+      this.pushEvent(
+        'user_direction',
+        null,
+        `Nova execução iniciada como continuação do run ${input.continuationOf.fromRunId} — resposta do usuário incorporada ao contexto.`
+      )
+    }
     this.pushEvent(
       'agent_log',
       'ag-codex',
@@ -330,7 +419,10 @@ export class CodexRunManager {
           this.onUsageObserved()
         }
         const agentText = extractAgentMessage(event.parsed)
-        if (agentText) this.lastAgentMessage = agentText
+        if (agentText) {
+          this.lastAgentMessage = agentText
+          this.agentTextAll += `\n${agentText}`
+        }
         if (message) this.pushEvent('agent_log', 'ag-codex', message)
         break
       }
@@ -351,10 +443,38 @@ export class CodexRunManager {
     const { run } = this.snapshot
     const agent = this.snapshot.agents[0]
 
+    // Pergunta ESTRUTURADA (marcador explícito, não heurística de texto):
+    // o processo terminou pedindo uma decisão → awaiting_user, nunca completed.
+    const needsInput = !cancelled && code === 0 ? parseNeedsInput(this.agentTextAll) : null
+
     if (cancelled) {
       run.state = assertTransition(run.state, 'cancelled')
       if (agent) agent.state = 'failed'
       this.pushEvent('run_state_changed', null, `Run cancelado pelo usuário (exit ${code ?? '—'})`)
+    } else if (needsInput) {
+      run.state = assertTransition(run.state, 'awaiting_user')
+      if (agent) agent.state = 'question_pending'
+      this.snapshot.questions.push({
+        id: `q-${run.id}`,
+        runId: run.id,
+        agentId: 'ag-codex',
+        text: needsInput.question,
+        options: (needsInput.options ?? []).map((label, i) => ({ id: `opt-${i}`, label })),
+        allowFreeText: true,
+        status: 'pending',
+        answer: null,
+        createdAt: this.now()
+      })
+      this.pushEvent(
+        'question_opened',
+        'ag-codex',
+        `O executor precisa da sua resposta: ${needsInput.question}`
+      )
+      this.pushEvent(
+        'run_state_changed',
+        null,
+        'O processo Codex ENCERROU aguardando sua decisão (não está pausado em memória). Responda para iniciar uma continuação.'
+      )
     } else if (code === 0) {
       run.state = assertTransition(run.state, 'verifying')
       run.state = assertTransition(run.state, 'completed')
@@ -373,6 +493,8 @@ export class CodexRunManager {
     }
 
     const finishedAt = this.now()
+    // Congela a duração de instâncias/run já terminais (bug do tempo correndo).
+    this.freezeTerminalTimestamps(finishedAt)
 
     if (this.meta && this.transcript) {
       this.transcript.writeMeta({
@@ -388,6 +510,9 @@ export class CodexRunManager {
         preExistingGitChanges: this.meta.preExisting
       })
     }
+
+    // Aguardando resposta não é um run terminal: sem "Resultado" ainda.
+    if (needsInput) return
 
     // Resumo Git de LEITURA pós-run (arquivos alterados). null se sem Git.
     const changed = this.meta ? await this.collectChangedFiles(this.meta.cwd) : null
@@ -412,6 +537,50 @@ export class CodexRunManager {
       this.snapshot.result = result
       this.pushEvent('run_state_changed', null, 'Resultado do run disponível na aba Resultado.')
     }
+  }
+
+  /**
+   * Responder à pergunta estruturada inicia uma CONTINUAÇÃO auditável:
+   * uma NOVA execução real com a tarefa original + a resposta do usuário +
+   * contexto necessário limitado. NÃO usa "resume" da CLI (não verificado).
+   */
+  async answerAndContinue(answer: string): Promise<RunSnapshot | null> {
+    if (!this.snapshot || this.snapshot.run.state !== 'awaiting_user') return this.getSnapshot()
+    const question = this.snapshot.questions.find((q) => q.status === 'pending')
+    if (!question || !this.lastStart) return this.getSnapshot()
+
+    // Marca a pergunta como respondida e registra a continuação no histórico.
+    question.status = 'answered'
+    question.answer = answer.trim()
+    this.pushEvent('question_answered', 'ag-codex', `Sua resposta: ${answer.trim().slice(0, 300)}`)
+    const fromRunId = this.snapshot.run.id
+    this.pushEvent(
+      'user_direction',
+      null,
+      `Nova execução iniciada como continuação do run ${fromRunId}.`
+    )
+
+    // Contexto necessário limitado da tentativa anterior (sem segredos).
+    const priorContext = (this.lastAgentMessage ?? '').replace(/@@LUTHOR_NEEDS_INPUT@@[\s\S]*$/, '').trim().slice(0, 1200)
+
+    // Libera o run atual e inicia a continuação real.
+    const start = this.lastStart
+    this.snapshot = null
+    return this.start({
+      text: start.originalText,
+      workspace: start.workspace,
+      cliStatus: start.cliStatus,
+      model: start.model,
+      contextRefs: start.contextRefs,
+      profileName: start.profileName,
+      continuationOf: {
+        originalText: start.originalText,
+        question: question.text,
+        answer: answer.trim(),
+        priorContext,
+        fromRunId
+      }
+    })
   }
 
   /** Aguarda gravações do transcript (testes/encerramento). */
