@@ -6,6 +6,8 @@ files:
   - out/**
   - package.json
 win:
+  # Ícone original do LUTHOR — gerado localmente por scripts/generate-icon.mjs
+  icon: build/icon.ico
   target:
     - dir
 npmRebuild: false

@@ -10,6 +10,9 @@ import { EffortSchema, ProviderKindSchema } from '../domain/schemas'
 /** pauseAgent / resumeAgent */
 export const AgentIdSchema = z.string().min(1).max(128)
 
+/** setActive / remove de workspaces. */
+export const WorkspaceIdSchema = z.string().min(1).max(128)
+
 export const AnswerQuestionInputSchema = z
   .object({
     questionId: z.string().min(1).max(128),
@@ -36,20 +39,49 @@ export const UserDirectionInputSchema = z
   })
 export type UserDirectionInput = z.infer<typeof UserDirectionInputSchema>
 
+/** Referência de contexto validada (caminho relativo ao workspace). */
+export const ContextRefSchema = z
+  .object({
+    relPath: z
+      .string()
+      .min(1)
+      .max(1024)
+      // Nunca absoluto nem escapando do workspace.
+      .refine((p) => !p.startsWith('/') && !/^[a-zA-Z]:/.test(p) && !p.split('/').includes('..'), {
+        message: 'relPath precisa ser relativo ao workspace (sem "..").'
+      }),
+    kind: z.enum(['file', 'folder'])
+  })
+  .strict()
+
 /**
- * "Nova tarefa": cria um NOVO run simulado no workspace ativo.
- * mode 'standard' = fluxo padrão sequencial; 'squad_demo' = cenário
- * demonstrável de squad dinâmica (só quando escolhido explicitamente).
+ * "Nova tarefa": cria um NOVO run no workspace ativo.
+ * mode 'standard' = simulação sequencial; 'squad_demo' = demo de squad
+ * simulada; 'codex' = EXECUTOR REAL via Codex CLI (Fase 2B).
  */
 export const NewTaskInputSchema = z
   .object({
     text: z.string().min(3).max(2000),
-    mode: z.enum(['standard', 'squad_demo']),
+    mode: z.enum(['standard', 'squad_demo', 'codex']),
     /** "Continuar a partir deste run": vínculo conceitual mockado com o run anterior. */
-    continuedFromRunId: z.string().min(1).max(128).optional()
+    continuedFromRunId: z.string().min(1).max(128).optional(),
+    /** Codex: modelo escolhido (só aplicado se a CLI aceitar). */
+    codexModel: z.string().min(1).max(120).optional(),
+    /** Codex: referências de contexto @arquivo/@pasta (já validadas no picker). */
+    contextRefs: z.array(ContextRefSchema).max(50).optional()
   })
   .strict()
 export type NewTaskInput = z.infer<typeof NewTaskInputSchema>
+
+/** Escolha de contexto no composer (picker nativo). */
+export const PickContextInputSchema = z.object({ kind: z.enum(['file', 'folder']) }).strict()
+export type PickContextInput = z.infer<typeof PickContextInputSchema>
+
+/** Consulta do autocomplete `@` (prefixo relativo ao workspace). */
+export const SuggestContextInputSchema = z
+  .object({ query: z.string().max(256) })
+  .strict()
+export type SuggestContextInput = z.infer<typeof SuggestContextInputSchema>
 
 const ProfileFieldsSchema = z.object({
   name: z.string().min(1).max(60),

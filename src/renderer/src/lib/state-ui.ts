@@ -47,19 +47,44 @@ export const RUN_STATE_STYLE: Record<RunState, StateStyle> = {
 
 export const STEP_STATUS_STYLE: Record<StepStatus, StateStyle> = {
   pending: { text: 'text-ink-dim', bg: 'bg-night-700', dot: 'bg-ink-faint', anim: '' },
-  in_progress: { text: 'text-exec', bg: 'bg-exec-soft', dot: 'bg-exec', anim: 'anim-pulse' },
+  // Em andamento é CIANO (não verde): nunca pode ler como "verificado".
+  in_progress: {
+    text: 'text-cyan-glow',
+    bg: 'bg-exec-soft',
+    dot: 'bg-cyan-glow',
+    anim: 'anim-pulse'
+  },
   verified: { text: 'text-exec', bg: 'bg-exec-soft', dot: 'bg-exec', anim: '' },
   failed: { text: 'text-alert', bg: 'bg-alert-soft', dot: 'bg-alert', anim: '' }
 }
 
-export function formatElapsed(sinceMs: number, now = Date.now()): string {
-  const total = Math.max(0, Math.floor((now - sinceMs) / 1000))
+function formatSeconds(totalMs: number): string {
+  const total = Math.max(0, Math.floor(totalMs / 1000))
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
   const s = total % 60
   if (h > 0) return `${h}h${String(m).padStart(2, '0')}m`
   if (m > 0) return `${m}m${String(s).padStart(2, '0')}s`
   return `${s}s`
+}
+
+export function formatElapsed(sinceMs: number, now = Date.now()): string {
+  return formatSeconds(now - sinceMs)
+}
+
+/**
+ * Duração honesta: congelada (finishedAt-startedAt) quando terminal; ao vivo
+ * (now-startedAt) enquanto ativo. Nunca usa "agora" para item terminal.
+ */
+export function formatDuration(
+  startedAt: number,
+  finishedAt: number | null,
+  isTerminal: boolean,
+  now = Date.now()
+): string {
+  // Terminal: congelado SEMPRE (nunca usa `now`, nem sem finishedAt).
+  if (isTerminal) return formatSeconds((finishedAt ?? startedAt) - startedAt)
+  return formatSeconds(now - startedAt)
 }
 
 export function formatClock(at: number): string {

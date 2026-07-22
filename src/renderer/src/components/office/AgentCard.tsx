@@ -1,6 +1,6 @@
 import type { Agent, AgentProfile, Question, RunEvent } from '@shared/domain'
-import { AGENT_ROLE_LABELS, AGENT_STATE_LABELS } from '@shared/domain'
-import { AGENT_STATE_STYLE, formatElapsed } from '@renderer/lib/state-ui'
+import { AGENT_ROLE_LABELS, AGENT_STATE_LABELS, isAgentTerminal } from '@shared/domain'
+import { AGENT_STATE_STYLE, formatDuration } from '@renderer/lib/state-ui'
 import { PixelBadge } from '@renderer/components/ui/PixelBadge'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
 import { AgentAvatar, ROLE_ACCENT } from './AgentAvatar'
@@ -11,6 +11,11 @@ interface AgentCardProps {
   pendingQuestion?: Question
   lastEvent?: RunEvent | null
   now: number
+  /**
+   * Configuração EFETIVA do executor real (Codex). Quando presente, o card
+   * mostra só o que foi de fato aplicado — nunca "codex-high"/"high".
+   */
+  effectiveConfigLabel?: string
   onSelect: (agentId: string) => void
   onOpenQuestion: (questionId: string) => void
 }
@@ -22,12 +27,15 @@ export function AgentCard({
   pendingQuestion,
   lastEvent,
   now,
+  effectiveConfigLabel,
   onSelect,
   onOpenQuestion
 }: AgentCardProps): React.JSX.Element {
   const style = AGENT_STATE_STYLE[agent.state]
   const justEmitted = lastEvent?.agentId === agent.id
   const accent = ROLE_ACCENT[agent.role]
+  const terminal = isAgentTerminal(agent.state)
+  const awaiting = agent.state === 'question_pending'
 
   return (
     <div
@@ -59,28 +67,57 @@ export function AgentCard({
         </div>
       </button>
 
-      <dl className="grid grid-cols-3 gap-x-2 text-[11px] text-ink-dim">
-        <div>
-          <dt className="font-pixel text-[9px] uppercase text-ink-faint">Modelo</dt>
-          <dd className="truncate" title={profile ? `${profile.name} (${profile.model})` : agent.profileId}>
-            {profile?.model ?? agent.profileId}
-          </dd>
-        </div>
-        <div>
-          <dt className="font-pixel text-[9px] uppercase text-ink-faint">Esforço</dt>
-          <dd>{agent.effort}</dd>
-        </div>
-        <div>
-          <dt className="font-pixel text-[9px] uppercase text-ink-faint">Tempo</dt>
-          <dd className="font-pixel">{formatElapsed(agent.startedAt, now)}</dd>
-        </div>
-      </dl>
+      {effectiveConfigLabel ? (
+        // Run REAL: só a configuração efetiva detectada + duração honesta.
+        <dl className="grid grid-cols-2 gap-x-2 text-[11px] text-ink-dim">
+          <div className="col-span-1">
+            <dt className="font-pixel text-[9px] uppercase text-ink-faint">Config efetiva</dt>
+            <dd className="truncate" title={effectiveConfigLabel}>
+              {effectiveConfigLabel}
+            </dd>
+          </div>
+          <div>
+            <dt className="font-pixel text-[9px] uppercase text-ink-faint">Tempo</dt>
+            <dd className="font-pixel">
+              {formatDuration(agent.startedAt, agent.finishedAt, terminal, now)}
+            </dd>
+          </div>
+        </dl>
+      ) : (
+        <dl className="grid grid-cols-3 gap-x-2 text-[11px] text-ink-dim">
+          <div>
+            <dt className="font-pixel text-[9px] uppercase text-ink-faint">Modelo</dt>
+            <dd className="truncate" title={profile ? `${profile.name} (${profile.model})` : agent.profileId}>
+              {profile?.model ?? agent.profileId}
+            </dd>
+          </div>
+          <div>
+            <dt className="font-pixel text-[9px] uppercase text-ink-faint">Esforço</dt>
+            <dd>{agent.effort}</dd>
+          </div>
+          <div>
+            <dt className="font-pixel text-[9px] uppercase text-ink-faint">Tempo</dt>
+            <dd className="font-pixel">
+              {formatDuration(agent.startedAt, agent.finishedAt, terminal, now)}
+            </dd>
+          </div>
+        </dl>
+      )}
 
       <p className="font-logs truncate border-t-2 border-night-700 pt-2 text-[11px] text-ink-dim" title={agent.lastEventMessage}>
         <span className="text-ink-faint">último evento:</span> {agent.lastEventMessage}
       </p>
 
-      {pendingQuestion && (
+      {awaiting && (
+        <button
+          type="button"
+          onClick={() => pendingQuestion && onOpenQuestion(pendingQuestion.id)}
+          className="pixel-frame font-pixel anim-blink cursor-pointer bg-warn-soft px-2 py-1 text-[10px] uppercase text-warn [--px-border:var(--color-warn)]"
+        >
+          ⏳ Aguardando sua resposta
+        </button>
+      )}
+      {!awaiting && pendingQuestion && (
         <button
           type="button"
           onClick={() => onOpenQuestion(pendingQuestion.id)}

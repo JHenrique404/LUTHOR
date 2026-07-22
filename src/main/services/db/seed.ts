@@ -48,24 +48,34 @@ export function createSeedProfiles(): AgentProfile[] {
   ]
 }
 
+/**
+ * Workspaces DEMONSTRATIVOS (origin: 'demo') — pastas fictícias, nunca lidas.
+ * Ficam separados dos projetos reais do usuário na UI e podem ser removidos.
+ */
 export function createSeedWorkspaces(now = Date.now()): Workspace[] {
   return [
     {
       id: 'ws-meu-saas',
       name: 'meu-saas',
       path: 'C:\\dev\\meu-saas',
+      origin: 'demo',
+      createdAt: now - 40 * 24 * 60 * MIN,
       lastOpenedAt: now - 8 * MIN
     },
     {
       id: 'ws-site-portfolio',
       name: 'site-portfolio',
       path: 'C:\\dev\\site-portfolio',
+      origin: 'demo',
+      createdAt: now - 60 * 24 * 60 * MIN,
       lastOpenedAt: now - 26 * 60 * MIN
     },
     {
       id: 'ws-cli-tools',
       name: 'cli-tools',
       path: 'C:\\dev\\cli-tools',
+      origin: 'demo',
+      createdAt: now - 90 * 24 * 60 * MIN,
       lastOpenedAt: now - 3 * 24 * 60 * MIN
     }
   ]
@@ -92,6 +102,7 @@ function orchestratorInstance(runId: string, now: number, subtask: string): Agen
     writeScope: 'read_only',
     worktreeRef: null,
     startedAt: now,
+    finishedAt: null,
     lastEventAt: now,
     lastEventMessage: 'Plano criado'
   }
@@ -126,7 +137,16 @@ export function createStandardRunParts(runId: string, title: string, now: number
       prompt: title,
       createdAt: now
     },
-    run: { id: runId, taskId: `task-${runId}`, state: 'running', startedAt: now, updatedAt: now },
+    run: {
+      id: runId,
+      taskId: `task-${runId}`,
+      state: 'running',
+      executor: 'simulated',
+      cancelRequested: false,
+      startedAt: now,
+      finishedAt: null,
+      updatedAt: now
+    },
     steps: stepTitles.map((stepTitle, i) => ({
       id: `${runId}-step-${i + 1}`,
       runId,
@@ -152,6 +172,7 @@ export function createStandardRunParts(runId: string, title: string, now: number
         worktreeRef:
           w.role === 'backend' || w.role === 'frontend' ? `wt/${runId}-${w.role}` : null,
         startedAt: now,
+        finishedAt: null,
         lastEventAt: now,
         lastEventMessage: i === 0 ? 'Iniciando análise' : 'Na fila'
       }))
@@ -181,7 +202,16 @@ export function createSquadRunParts(runId: string, title: string, now: number): 
       prompt: title,
       createdAt: now
     },
-    run: { id: runId, taskId: `task-${runId}`, state: 'running', startedAt: now, updatedAt: now },
+    run: {
+      id: runId,
+      taskId: `task-${runId}`,
+      state: 'running',
+      executor: 'simulated',
+      cancelRequested: false,
+      startedAt: now,
+      finishedAt: null,
+      updatedAt: now
+    },
     steps: bugs.map((bug, i) => ({
       id: `${runId}-step-${i + 1}`,
       runId,
@@ -210,6 +240,7 @@ export function createSquadRunParts(runId: string, title: string, now: number): 
         writeScope: 'writer' as const,
         worktreeRef: `wt/${runId}-bug-${i + 1}`,
         startedAt: now,
+        finishedAt: bug.state === 'completed' ? now : null,
         lastEventAt: now,
         lastEventMessage:
           bug.state === 'executing'
@@ -240,7 +271,10 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
       id: runId,
       taskId: 'task-auth',
       state: 'running',
+      executor: 'simulated',
+      cancelRequested: false,
       startedAt: now - 40 * MIN,
+      finishedAt: null,
       updatedAt: now
     },
     steps: [
@@ -299,6 +333,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         writeScope: 'read_only',
         worktreeRef: null,
         startedAt: now - 40 * MIN,
+        finishedAt: null,
         lastEventAt: now - MIN,
         lastEventMessage: 'Etapa 4 delegada ao Backend'
       },
@@ -315,6 +350,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         writeScope: 'writer',
         worktreeRef: 'wt/backend-auth',
         startedAt: now - 18 * MIN,
+        finishedAt: null,
         lastEventAt: now - MIN,
         lastEventMessage: 'Escrevendo middleware de sessão'
       },
@@ -331,6 +367,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         writeScope: 'writer',
         worktreeRef: 'wt/frontend-auth',
         startedAt: now - 12 * MIN,
+        finishedAt: null,
         lastEventAt: now - 5 * MIN,
         lastEventMessage: 'Aguardando conclusão da etapa 4'
       },
@@ -347,6 +384,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         writeScope: 'read_only',
         worktreeRef: null,
         startedAt: now - 38 * MIN,
+        finishedAt: now - 25 * MIN,
         lastEventAt: now - 25 * MIN,
         lastEventMessage: 'Relatório entregue ao orquestrador'
       },
@@ -363,6 +401,7 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         writeScope: 'read_only',
         worktreeRef: null,
         startedAt: now - 10 * MIN,
+        finishedAt: null,
         lastEventAt: now - 2 * MIN,
         lastEventMessage: 'Analisando expiração de sessão'
       }
@@ -425,6 +464,8 @@ export function createSeedSnapshot(now = Date.now()): RunSnapshot {
         at: now - 2 * MIN
       }
     ],
-    profiles: createSeedProfiles()
+    profiles: createSeedProfiles(),
+    result: null,
+    effectiveConfig: null
   }
 }

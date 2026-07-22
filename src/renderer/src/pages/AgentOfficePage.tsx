@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import type { Agent } from '@shared/domain'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import type { Agent, ProviderCapabilities } from '@shared/domain'
 import { RUN_STATE_LABELS, verifiedProgress } from '@shared/domain'
 import { isTerminal } from '@shared/state-machine/run-state'
 import { useRunStore } from '@renderer/stores/run-store'
@@ -10,6 +11,8 @@ import { PixelButton } from '@renderer/components/ui/PixelButton'
 import { PixelPanel } from '@renderer/components/ui/PixelPanel'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
 import { OrchestratorDesk } from '@renderer/components/office/OrchestratorDesk'
+import { LuthorOrchestratorPanel } from '@renderer/components/office/LuthorOrchestratorPanel'
+import { RunCompletionPanel } from '@renderer/components/office/RunCompletionPanel'
 import { AgentCard } from '@renderer/components/office/AgentCard'
 import { SquadCard } from '@renderer/components/office/SquadCard'
 import { AgentDrawer } from '@renderer/components/office/AgentDrawer'
@@ -21,6 +24,7 @@ import { EventTicker } from '@renderer/components/office/EventTicker'
 interface ComposerState {
   kind: ComposerKind
   continuedFromRunId?: string
+  prefillText?: string
 }
 
 /** Estados em que o run aceita "Direcionar run". */
@@ -33,6 +37,7 @@ export function AgentOfficePage(): React.JSX.Element {
     lastEvent,
     pauseAll,
     resumeAll,
+    cancelRun,
     pauseAgent,
     resumeAgent,
     answerQuestions,
@@ -40,15 +45,63 @@ export function AgentOfficePage(): React.JSX.Element {
     startNewTask
   } = useRunStore()
   const now = useNow(1000)
+  const navigate = useNavigate()
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [decisionBoxOpen, setDecisionBoxOpen] = useState(false)
   const [decisionInitialId, setDecisionInitialId] = useState<string | null>(null)
   const [composer, setComposer] = useState<ComposerState | null>(null)
+  const [codexAvailability, setCodexAvailability] = useState<{ ok: boolean; reason?: string }>({
+    ok: false,
+    reason: 'verificando a CLI do Codex…'
+  })
+  const [codexCapabilities, setCodexCapabilities] = useState<ProviderCapabilities | null>(null)
 
+  useEffect(() => {
+    void window.luthor?.connections.list().then((list) => {
+      const codex = list.find((c) => c.id === 'codex')
+      if (codex) setCodexAvailability({ ok: codex.status === 'configured', reason: codex.detail })
+    })
+    void window.luthor?.codex?.capabilities().then(setCodexCapabilities)
+  }, [])
+
+  // Estado LIMPO (instalação nova / nenhum run iniciado): sem demo automático.
   if (!snapshot) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="font-pixel anim-pulse text-xs text-ink-dim">Carregando central…</p>
+      <div className="scanlines relative flex h-full flex-col items-center justify-center gap-5 p-6 text-center">
+        <div>
+          <h1 className="font-pixel text-cyan-glow text-lg tracking-widest">AGENT OFFICE</h1>
+          <p className="mt-2 max-w-md text-sm text-ink-dim">
+            Nenhum run ativo. Abra um workspace e crie uma <strong>Nova tarefa</strong> — simulada
+            para explorar, ou pelo <span className="text-exec">Executor Codex</span> para trabalho
+            real dentro do workspace.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <PixelButton variant="primary" onClick={() => navigate('/')}>
+            Abrir workspace
+          </PixelButton>
+          <PixelButton variant="orch" onClick={() => setComposer({ kind: 'new_task' })}>
+            Nova tarefa
+          </PixelButton>
+        </div>
+        {composer && (
+          <ComposerModal
+            kind={composer.kind}
+            agents={[]}
+            continuedFromRunId={composer.continuedFromRunId}
+            prefillText={composer.prefillText}
+            codexAvailability={codexAvailability}
+            codexCapabilities={codexCapabilities}
+            onPickContext={(k) =>
+              window.luthor?.codex?.pickContext(k) ??
+              Promise.resolve({ status: 'cancelled' as const })
+            }
+            onSuggestContext={(q) => window.luthor?.codex?.suggestContext(q) ?? Promise.resolve([])}
+            onClose={() => setComposer(null)}
+            onSubmitNewTask={(input) => void startNewTask(input)}
+            onSubmitInstruction={(input) => void addUserDirection(input)}
+          />
+        )}
       </div>
     )
   }
@@ -64,7 +117,9 @@ export function AgentOfficePage(): React.JSX.Element {
 
   const paused = snapshot.run.state === 'paused'
   const terminal = isTerminal(snapshot.run.state)
-  const directable = DIRECTABLE_RUN_STATES.includes(snapshot.run.state)
+  const realRun = snapshot.run.executor === 'codex_cli'
+  const cancelling = snapshot.run.cancelRequested && !terminal
+  const directable = !realRun && DIRECTABLE_RUN_STATES.includes(snapshot.run.state)
   const runStyle = RUN_STATE_STYLE[snapshot.run.state]
   const pendingQuestions = snapshot.questions.filter((q) => q.status === 'pending')
   const progress = verifiedProgress(snapshot.steps)
@@ -80,9 +135,14 @@ export function AgentOfficePage(): React.JSX.Element {
         <div>
           <h1 className="font-pixel text-cyan-glow text-lg tracking-widest">AGENT OFFICE</h1>
           <p className="text-xs text-ink-faint">
-            workspace ativo: <span className="text-ink-dim">{snapshot.workspace.name}</span> · run{' '}
+            workspace ativo: <span className="text-exec">{snapshot.workspace.name}</span> · run{' '}
             <span className="font-logs">{snapshot.run.id}</span> ·{' '}
-            <span className="text-warn">dados simulados</span> · Fase 1: um run por vez
+            {realRun ? (
+              <span className="font-pixel text-exec">EXECUTOR REAL · CODEX CLI</span>
+            ) : (
+              <span className="text-warn">agentes simulados</span>
+            )}{' '}
+            · um run por vez
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -105,7 +165,18 @@ export function AgentOfficePage(): React.JSX.Element {
               Direcionar run
             </PixelButton>
           )}
-          {!terminal && (
+          {/* Run REAL: a CLI não suporta pausa — só cancelamento gracioso. */}
+          {!terminal && realRun && (
+            <PixelButton
+              variant="danger"
+              disabled={cancelling}
+              onClick={() => void cancelRun()}
+              title="Interrompe graciosamente; força o encerramento após 5s"
+            >
+              {cancelling ? 'Cancelando…' : 'Cancelar run'}
+            </PixelButton>
+          )}
+          {!terminal && !realRun && (
             <PixelButton
               variant={paused ? 'primary' : 'danger'}
               onClick={() => void (paused ? resumeAll() : pauseAll())}
@@ -125,32 +196,56 @@ export function AgentOfficePage(): React.JSX.Element {
         </div>
       </header>
 
-      {terminal && (
-        <PixelPanel
-          title="Resumo do run"
-          titleAccent="var(--color-cyan-glow)"
-          frameColor="var(--color-night-500)"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-ink-dim">
-              <span className="text-ink">{snapshot.task.title}</span> —{' '}
-              {RUN_STATE_LABELS[snapshot.run.state].toLowerCase()} com {progress.verified} de{' '}
-              {progress.total} etapas verificadas. As instâncias de agentes permanecem no
-              histórico deste run.
-            </p>
-            <PixelButton
-              variant="orch"
-              onClick={() =>
-                setComposer({ kind: 'new_task', continuedFromRunId: snapshot.run.id })
-              }
-            >
-              Continuar a partir deste run
-            </PixelButton>
-          </div>
-        </PixelPanel>
+      {/* Run REAL: orquestrador LUTHOR (sem IA) com progresso de execução honesto.
+          Run SIMULADO terminal: resumo por etapas verificadas. */}
+      {realRun ? (
+        <LuthorOrchestratorPanel snapshot={snapshot} />
+      ) : (
+        terminal && (
+          <PixelPanel
+            title="Resumo do run"
+            titleAccent="var(--color-cyan-glow)"
+            frameColor="var(--color-night-500)"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-ink-dim">
+                <span className="text-ink">{snapshot.task.title}</span> —{' '}
+                {RUN_STATE_LABELS[snapshot.run.state].toLowerCase()} com {progress.verified} de{' '}
+                {progress.total} etapas verificadas. As instâncias de agentes permanecem no
+                histórico deste run.
+              </p>
+              <PixelButton
+                variant="orch"
+                onClick={() =>
+                  setComposer({ kind: 'new_task', continuedFromRunId: snapshot.run.id })
+                }
+              >
+                Continuar a partir deste run
+              </PixelButton>
+            </div>
+          </PixelPanel>
+        )
       )}
 
-      {orchestrator && (
+      {/* Painel compacto de conclusão do run real (abaixo do orquestrador). */}
+      {realRun && terminal && (
+        <RunCompletionPanel
+          snapshot={snapshot}
+          onViewResult={() => navigate('/run')}
+          onNewTask={() => setComposer({ kind: 'new_task' })}
+          onAnswerAndContinue={() =>
+            setComposer({
+              kind: 'new_task',
+              continuedFromRunId: snapshot.run.id,
+              prefillText: snapshot.result?.finalMessage
+                ? `Responder à pergunta do run anterior:\n${snapshot.result.finalMessage}\n\nMinha resposta: `
+                : undefined
+            })
+          }
+        />
+      )}
+
+      {!realRun && orchestrator && (
         <OrchestratorDesk
           orchestrator={orchestrator}
           profile={snapshot.profiles.find((p) => p.id === orchestrator.profileId)}
@@ -180,6 +275,7 @@ export function AgentOfficePage(): React.JSX.Element {
             pendingQuestion={pendingQuestions.find((q) => q.agentId === agent.id)}
             lastEvent={lastEvent}
             now={now}
+            effectiveConfigLabel={realRun ? snapshot.effectiveConfig?.profileName : undefined}
             onSelect={setSelectedAgentId}
             onOpenQuestion={(questionId) => openDecisionBox(questionId)}
           />
@@ -213,6 +309,13 @@ export function AgentOfficePage(): React.JSX.Element {
           kind={composer.kind}
           agents={snapshot.agents}
           continuedFromRunId={composer.continuedFromRunId}
+          prefillText={composer.prefillText}
+          codexAvailability={codexAvailability}
+          codexCapabilities={codexCapabilities}
+          onPickContext={(k) =>
+            window.luthor?.codex?.pickContext(k) ?? Promise.resolve({ status: 'cancelled' as const })
+          }
+          onSuggestContext={(q) => window.luthor?.codex?.suggestContext(q) ?? Promise.resolve([])}
           onClose={() => setComposer(null)}
           onSubmitNewTask={(input) => void startNewTask(input)}
           onSubmitInstruction={(input) => void addUserDirection(input)}

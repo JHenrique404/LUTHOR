@@ -58,10 +58,20 @@ export type StepStatus = z.infer<typeof StepStatusSchema>
 export const WriteScopeSchema = z.enum(['read_only', 'writer'])
 export type WriteScope = z.infer<typeof WriteScopeSchema>
 
+/**
+ * `demo` = dado de exemplo seedado (pasta pode nem existir; removível a
+ * qualquer momento). `user` = pasta real escolhida pelo usuário via diálogo
+ * nativo e validada no processo main. Os dois nunca se misturam na UI.
+ */
+export const WorkspaceOriginSchema = z.enum(['demo', 'user'])
+export type WorkspaceOrigin = z.infer<typeof WorkspaceOriginSchema>
+
 export const WorkspaceSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
   path: z.string().min(1),
+  origin: WorkspaceOriginSchema,
+  createdAt: z.number(),
   lastOpenedAt: z.number()
 })
 export type Workspace = z.infer<typeof WorkspaceSchema>
@@ -75,11 +85,20 @@ export const TaskSchema = z.object({
 })
 export type Task = z.infer<typeof TaskSchema>
 
+/** Quem executa o run: simulação da Fase 1 ou o executor real (Fase 2B). */
+export const RunExecutorSchema = z.enum(['simulated', 'codex_cli'])
+export type RunExecutor = z.infer<typeof RunExecutorSchema>
+
 export const RunSchema = z.object({
   id: z.string(),
   taskId: z.string(),
   state: RunStateSchema,
+  executor: RunExecutorSchema.default('simulated'),
+  /** Cancelamento gracioso solicitado; aguardando o processo encerrar. */
+  cancelRequested: z.boolean().default(false),
   startedAt: z.number(),
+  /** Congelado ao entrar em estado terminal. null enquanto ativo. */
+  finishedAt: z.number().nullable().default(null),
   updatedAt: z.number()
 })
 export type Run = z.infer<typeof RunSchema>
@@ -126,6 +145,11 @@ export const AgentSchema = z.object({
   writeScope: WriteScopeSchema,
   worktreeRef: z.string().nullable(),
   startedAt: z.number(),
+  /**
+   * Congelado quando a instância atinge estado terminal (completed/failed).
+   * null = ainda ativa. Corrige o bug de duração que continuava correndo.
+   */
+  finishedAt: z.number().nullable().default(null),
   lastEventAt: z.number(),
   lastEventMessage: z.string()
 })
@@ -192,6 +216,44 @@ export const RunEventSchema = z.object({
 })
 export type RunEvent = z.infer<typeof RunEventSchema>
 
+/** Arquivo tocado no workspace após um run real (Git somente leitura). */
+export const ChangedFileSchema = z.object({
+  path: z.string(),
+  /** Código porcelain do Git (M, A, ??, …). */
+  status: z.string(),
+  /** true = já estava alterado ANTES do run (não atribuível ao executor). */
+  preExisting: z.boolean()
+})
+export type ChangedFile = z.infer<typeof ChangedFileSchema>
+
+/** Uso por run: SOMENTE números emitidos estruturadamente pela CLI. */
+export const RunUsageSchema = z.record(z.string(), z.number())
+
+/**
+ * Resultado final de um run REAL — nada aqui é estimado ou inventado:
+ * cada campo nullable fica null quando a CLI/Git não informou.
+ */
+export const RunResultSchema = z.object({
+  provider: z.string(),
+  cliVersion: z.string().nullable(),
+  /** Modelo APENAS se a CLI o informou nos eventos. */
+  model: z.string().nullable(),
+  /** Resposta final completa da IA (sem truncamento artificial). */
+  finalMessage: z.string().nullable(),
+  startedAt: z.number(),
+  finishedAt: z.number(),
+  exitCode: z.number().nullable(),
+  cancelled: z.boolean(),
+  /** null = Git indisponível na pasta. */
+  preExistingGitChanges: z.boolean().nullable(),
+  /** null = Git indisponível; lista via leitura pós-run. */
+  changedFiles: z.array(ChangedFileSchema).nullable(),
+  changedFilesTruncated: z.boolean(),
+  /** null = uso por run não informado pela CLI. */
+  usage: RunUsageSchema.nullable()
+})
+export type RunResult = z.infer<typeof RunResultSchema>
+
 /** Snapshot completo de um run, enviado do main para o renderer a cada evento. */
 export const RunSnapshotSchema = z.object({
   workspace: WorkspaceSchema,
@@ -202,7 +264,26 @@ export const RunSnapshotSchema = z.object({
   questions: z.array(QuestionSchema),
   checkpoints: z.array(CheckpointSchema),
   events: z.array(RunEventSchema),
-  profiles: z.array(AgentProfileSchema)
+  profiles: z.array(AgentProfileSchema),
+  /** Resultado auditável de um run REAL. null em runs simulados/em andamento. */
+  result: RunResultSchema.nullable().default(null),
+  /**
+   * Configuração EFETIVA aplicada ao run real (não decorativa): o que
+   * de fato foi passado à CLI. null em runs simulados.
+   */
+  effectiveConfig: z
+    .object({
+      profileId: z.string(),
+      profileName: z.string(),
+      /** Modelo aplicado via flag; null = padrão da CLI. */
+      appliedModel: z.string().nullable(),
+      /** Esforço aplicado via config; null = padrão da CLI. */
+      appliedEffort: z.string().nullable(),
+      /** Referências de contexto (caminhos relativos ao workspace). */
+      contextRefs: z.array(z.object({ relPath: z.string(), kind: z.enum(['file', 'folder']) }))
+    })
+    .nullable()
+    .default(null)
 })
 export type RunSnapshot = z.infer<typeof RunSnapshotSchema>
 
@@ -223,6 +304,108 @@ export function verifiedProgress(steps: PlanStep[]): { verified: number; total: 
     total: steps.length
   }
 }
+
+/** Estados terminais de uma instância de agente. */
+export const TERMINAL_AGENT_STATES: AgentState[] = ['completed', 'failed']
+
+export function isAgentTerminal(state: AgentState): boolean {
+  return TERMINAL_AGENT_STATES.includes(state)
+}
+
+/**
+ * Duração honesta: quando terminal, usa finishedAt (congelado); enquanto
+ * ativo, usa `now`. NUNCA usa "agora" para um agente/run já terminal —
+ * corrige o bug do tempo que continuava correndo após concluir.
+ */
+export function durationMs(
+  startedAt: number,
+  finishedAt: number | null,
+  isTerminal: boolean,
+  now: number
+): number {
+  // Terminal: SEMPRE congelado. Nunca cai para `now` (nem se finishedAt for
+  // null por algum motivo) — a duração exibida não pode crescer após terminal.
+  if (isTerminal) return Math.max(0, (finishedAt ?? startedAt) - startedAt)
+  return Math.max(0, now - startedAt)
+}
+
+/**
+ * Resumo HONESTO de execução real (sem inventar PlanStep). Deriva dos estados
+ * das instâncias reais — usado quando o run não tem plano com etapas reais.
+ */
+export function executionSummary(agents: Agent[]): {
+  running: number
+  awaiting: number
+  completed: number
+  failed: number
+} {
+  return {
+    running: agents.filter((a) => a.state === 'executing' || a.state === 'verifying').length,
+    awaiting: agents.filter((a) => a.state === 'question_pending' || a.state === 'waiting').length,
+    completed: agents.filter((a) => a.state === 'completed').length,
+    failed: agents.filter((a) => a.state === 'failed').length
+  }
+}
+
+/** Marcador estruturado que o executor emite quando precisa de decisão do usuário. */
+export const NEEDS_INPUT_MARKER = '@@LUTHOR_NEEDS_INPUT@@'
+
+export interface ParsedNeedsInput {
+  question: string
+  context?: string
+  options?: string[]
+}
+
+/**
+ * Extrai o marcador estruturado de necessidade de resposta do texto do agente.
+ * NÃO usa heurística de "parece uma pergunta" — só o marcador explícito conta.
+ * Retorna null quando ausente/malformado.
+ */
+export function parseNeedsInput(text: string | null | undefined): ParsedNeedsInput | null {
+  if (!text) return null
+  const idx = text.indexOf(NEEDS_INPUT_MARKER)
+  if (idx < 0) return null
+  const after = text.slice(idx + NEEDS_INPUT_MARKER.length).trim()
+  // JSON logo após o marcador (primeiro objeto balanceado).
+  const start = after.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  let end = -1
+  for (let i = start; i < after.length; i++) {
+    if (after[i] === '{') depth++
+    else if (after[i] === '}') {
+      depth--
+      if (depth === 0) {
+        end = i
+        break
+      }
+    }
+  }
+  if (end < 0) return null
+  try {
+    const raw = JSON.parse(after.slice(start, end + 1)) as Record<string, unknown>
+    const question = typeof raw.question === 'string' ? raw.question.trim() : ''
+    if (!question) return null
+    const context = typeof raw.context === 'string' ? raw.context.trim() : undefined
+    const options = Array.isArray(raw.options)
+      ? raw.options.filter((o): o is string => typeof o === 'string' && o.trim().length > 0).slice(0, 8)
+      : undefined
+    return { question, context, options: options && options.length > 0 ? options : undefined }
+  } catch {
+    return null
+  }
+}
+
+/** Instrução anexada ao prompt real: como pedir uma decisão de forma estruturada. */
+export const NEEDS_INPUT_INSTRUCTION = [
+  '',
+  'IMPORTANTE: se faltar uma decisão, arquivo, requisito ou informação indispensável',
+  'para concluir com segurança, NÃO pergunte em texto livre nem conclua adivinhando.',
+  `Em vez disso, emita UMA linha começando exatamente com ${NEEDS_INPUT_MARKER} seguida de`,
+  'um objeto JSON com as chaves: "question" (a pergunta), "context" (breve, sem segredos)',
+  'e "options" (lista opcional de escolhas). Exemplo:',
+  `${NEEDS_INPUT_MARKER} {"question":"Em qual arquivo adicionar as linhas?","options":["README.md","src/index.ts"]}`
+].join('\n')
 
 /**
  * Regra de isolamento de escrita (preparação para worktrees Git):

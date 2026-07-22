@@ -1,39 +1,19 @@
-import type { AgentProfile, RunSnapshot, Workspace } from '@shared/domain'
-import { AgentProfileSchema, RunSnapshotSchema, WorkspaceSchema } from '@shared/domain'
+import type { AgentProfile, RunSnapshot } from '@shared/domain'
+import { AgentProfileSchema, RunSnapshotSchema } from '@shared/domain'
 import type { CreateProfileInput, UpdateProfileInput } from '@shared/ipc/contract'
 import type { Repository } from './repository'
-import { createSeedSnapshot, createSeedWorkspaces } from './seed'
+import { createSeedSnapshot } from './seed'
 
-/** Persistência em memória com seeds — caminho garantido da Fase 1. */
+/**
+ * Persistência em memória do run demo + perfis (Fase 1, preservada).
+ * Workspaces agora vivem no registro persistente (services/workspaces/).
+ */
 export class InMemoryRepository implements Repository {
-  private workspaces: Workspace[]
   private snapshot: RunSnapshot
 
   constructor() {
-    this.workspaces = createSeedWorkspaces()
     // Valida os seeds contra os schemas na inicialização: dado inválido quebra cedo.
     this.snapshot = RunSnapshotSchema.parse(createSeedSnapshot())
-  }
-
-  async listWorkspaces(): Promise<Workspace[]> {
-    return [...this.workspaces].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
-  }
-
-  async registerWorkspace(path: string): Promise<Workspace> {
-    const existing = this.workspaces.find((w) => w.path === path)
-    if (existing) {
-      existing.lastOpenedAt = Date.now()
-      return existing
-    }
-    const segments = path.split(/[\\/]/).filter(Boolean)
-    const workspace = WorkspaceSchema.parse({
-      id: `ws-${Date.now().toString(36)}`,
-      name: segments[segments.length - 1] ?? path,
-      path,
-      lastOpenedAt: Date.now()
-    })
-    this.workspaces.push(workspace)
-    return workspace
   }
 
   async getRunSnapshot(): Promise<RunSnapshot> {

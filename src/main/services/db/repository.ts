@@ -1,17 +1,16 @@
-import type { AgentProfile, RunSnapshot, Workspace } from '@shared/domain'
+import type { AgentProfile, RunSnapshot } from '@shared/domain'
 import type { CreateProfileInput, UpdateProfileInput } from '@shared/ipc/contract'
 
 /**
- * Contrato de persistência do LUTHOR.
+ * Contrato de persistência do LUTHOR (run demo + perfis).
  *
  * Fase 1: InMemoryRepository com dados seedados (caminho garantido do MVP).
- * Fase 2: SqliteRepository implementando esta MESMA interface sobre SQLite
- * (schema preparado em ./schema.sql). A troca é feita em createRepository()
- * sem tocar em IPC nem renderer.
+ * Fase 2A: workspaces saíram daqui para o registro persistente em
+ * services/workspaces/ (JSON versionado com migrações). Perfis e snapshot
+ * do run demo continuam em memória; SQLite (./schema.sql) segue como opção
+ * futura implementando esta MESMA interface via createRepository().
  */
 export interface Repository {
-  listWorkspaces(): Promise<Workspace[]>
-  registerWorkspace(path: string): Promise<Workspace>
   getRunSnapshot(): Promise<RunSnapshot>
   listProfiles(): Promise<AgentProfile[]>
   createProfile(input: CreateProfileInput): Promise<AgentProfile[]>

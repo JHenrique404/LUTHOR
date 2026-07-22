@@ -1,13 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { Question, RunSnapshot } from '@shared/domain'
+import { MemoryRouter } from 'react-router-dom'
+import type { Agent, Question, RunResult, RunSnapshot } from '@shared/domain'
 import { StepProgress } from '@renderer/components/ui/StepProgress'
+import { RunProgressSummary } from '@renderer/components/ui/RunProgressSummary'
 import { AgentCard } from '@renderer/components/office/AgentCard'
 import { ComposerModal } from '@renderer/components/office/ComposerModal'
 import { DecisionBox } from '@renderer/components/office/DecisionBox'
 import { SquadCard } from '@renderer/components/office/SquadCard'
+import { RunResultPanel } from '@renderer/components/office/RunResultPanel'
+import { RunCompletionPanel } from '@renderer/components/office/RunCompletionPanel'
+import { LuthorOrchestratorPanel } from '@renderer/components/office/LuthorOrchestratorPanel'
 import { AgentOfficePage } from '@renderer/pages/AgentOfficePage'
+import { RunDetailPage } from '@renderer/pages/RunDetailPage'
+import { ConnectionsPage } from '@renderer/pages/ConnectionsPage'
 import { useRunStore } from '@renderer/stores/run-store'
 import { createSeedSnapshot, createSquadRunParts } from '../src/main/services/db/seed'
 
@@ -31,10 +38,63 @@ function makeQuestion(id: string, agentId: string, text: string): Question {
 }
 
 describe('StepProgress', () => {
+  const makeSteps = (statuses: Array<'verified' | 'in_progress' | 'pending' | 'failed'>) =>
+    statuses.map((status, i) => ({
+      id: `s-${i + 1}`,
+      runId: 'r',
+      index: i + 1,
+      title: `Etapa ${i + 1}`,
+      status,
+      assignedAgentId: null
+    }))
+
+  const successBlocks = (container: HTMLElement): number =>
+    container.querySelectorAll('[data-step-status="verified"]').length
+
   it('mostra progresso derivado, nunca porcentagem', () => {
     render(<StepProgress steps={snapshot.steps} />)
     expect(screen.getByText('3 de 5 etapas verificadas')).toBeInTheDocument()
     expect(screen.queryByText(/%/)).not.toBeInTheDocument()
+  })
+
+  it('REGRESSÃO 1/5: exatamente UM bloco de sucesso, mesmo com in_progress na barra', () => {
+    const { container } = render(
+      <StepProgress steps={makeSteps(['verified', 'in_progress', 'pending', 'pending', 'pending'])} />
+    )
+    expect(screen.getByRole('img', { name: '1 de 5 etapas verificadas' })).toBeInTheDocument()
+    expect(successBlocks(container)).toBe(1)
+    // in_progress nunca conta nem parece sucesso (estilo próprio, sem bg-exec).
+    const inProgress = container.querySelector('[data-step-status="in_progress"]')
+    expect(inProgress).not.toBeNull()
+    expect(inProgress!.className).not.toContain('bg-exec')
+  })
+
+  it('REGRESSÃO 1/5 com a ÚLTIMA etapa verificada: só o quinto bloco é sucesso', () => {
+    const { container } = render(
+      <StepProgress
+        steps={makeSteps(['in_progress', 'in_progress', 'pending', 'pending', 'verified'])}
+      />
+    )
+    expect(screen.getByRole('img', { name: '1 de 5 etapas verificadas' })).toBeInTheDocument()
+    const blocks = Array.from(container.querySelectorAll('[data-step-status]'))
+    expect(blocks.map((b) => b.getAttribute('data-step-status'))).toEqual([
+      'in_progress',
+      'in_progress',
+      'pending',
+      'pending',
+      'verified'
+    ])
+    expect(successBlocks(container)).toBe(1)
+  })
+
+  it('5/5: todos os cinco blocos em sucesso', () => {
+    const { container } = render(
+      <StepProgress
+        steps={makeSteps(['verified', 'verified', 'verified', 'verified', 'verified'])}
+      />
+    )
+    expect(screen.getByRole('img', { name: '5 de 5 etapas verificadas' })).toBeInTheDocument()
+    expect(successBlocks(container)).toBe(5)
   })
 })
 
@@ -161,6 +221,519 @@ describe('DecisionBox', () => {
   })
 })
 
+describe('ComposerModal — contexto e capacidades Codex (Fase 2B.1)', () => {
+  const codexCaps = {
+    provider: 'codex' as const,
+    providerName: 'Codex',
+    available: true,
+    availableModels: [] as string[],
+    modelConfigurable: true,
+    availableEffortLevels: [] as string[],
+    effortConfigurable: false,
+    supportsUsageReporting: false,
+    supportsImages: false,
+    imageFlagDetected: true,
+    supportsFileReferences: true,
+    supportsPlanMode: false,
+    supportsInteractiveQuestions: false,
+    usageDashboardUrl: 'https://platform.openai.com/usage'
+  }
+
+  function renderCodexComposer(pick?: ReturnType<typeof vi.fn>) {
+    const onSubmitNewTask = vi.fn()
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={pick ?? vi.fn()}
+        onClose={() => {}}
+        onSubmitNewTask={onSubmitNewTask}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    return onSubmitNewTask
+  }
+
+  it('executor explícito: Codex CLI, modelo padrão, esforço não configurável — sem modelos falsos', async () => {
+    renderCodexComposer()
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    expect(screen.getByText('Codex CLI')).toBeInTheDocument()
+    expect(screen.getByText(/padrão da CLI/i)).toBeInTheDocument()
+    expect(screen.getByText(/não configurável nesta versão detectada/i)).toBeInTheDocument()
+    expect(screen.getByText(/Fase 2C/i)).toBeInTheDocument()
+    // Nenhum modelo fixo inventado nem seletor de perfil mockado.
+    expect(screen.queryByText(/GPT-5|Opus|Sonnet/i)).not.toBeInTheDocument()
+  })
+
+  it('imagem detectada mas não suportada: aviso claro, sem aceitar anexo', async () => {
+    renderCodexComposer()
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    expect(screen.getAllByText(/ainda não são suportadas/i).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: /Anexar imagem/i })).toBeDisabled()
+  })
+
+  it('adiciona contexto permitido, mostra bloqueio e remove item', async () => {
+    const pick = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'ok', ref: { relPath: 'src/a.ts', kind: 'file' } })
+      .mockResolvedValueOnce({ status: 'blocked', message: 'Bloqueado por padrão: ".env" parece conter segredos.' })
+    const onSubmit = renderCodexComposer(pick)
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+
+    await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
+    // Chip vinculada (identificada pelo botão de remover, único).
+    expect(await screen.findByRole('button', { name: /Remover src\/a\.ts/i })).toBeInTheDocument()
+
+    // segunda seleção bloqueada mostra a razão
+    await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
+    expect(await screen.findByText(/parece conter segredos/i)).toBeInTheDocument()
+
+    // envia com o contexto permitido
+    await userEvent.type(screen.getByLabelText(/Descreva a tarefa/i), 'documentar o projeto')
+    await userEvent.click(screen.getByRole('button', { name: /executar de verdade/i }))
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'codex',
+        contextRefs: [{ relPath: 'src/a.ts', kind: 'file' }]
+      })
+    )
+  })
+
+  it('remover contexto antes de iniciar tira o item da lista', async () => {
+    const pick = vi
+      .fn()
+      .mockResolvedValue({ status: 'ok', ref: { relPath: 'src/a.ts', kind: 'file' } })
+    renderCodexComposer(pick)
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
+    expect(await screen.findByRole('button', { name: /Remover src\/a\.ts/i })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Remover src\/a\.ts/i }))
+    expect(screen.queryByRole('button', { name: /Remover src\/a\.ts/i })).not.toBeInTheDocument()
+  })
+
+  it('autocomplete @: sugere sob demanda e a seleção vira chip', async () => {
+    const suggest = vi
+      .fn()
+      .mockResolvedValue([{ relPath: 'src/App.tsx', kind: 'file' as const }])
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={vi.fn()}
+        onSuggestContext={suggest}
+        onClose={() => {}}
+        onSubmitNewTask={vi.fn()}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    await userEvent.type(screen.getByLabelText(/Descreva a tarefa/i), 'ver @App')
+    expect(suggest).toHaveBeenCalled()
+    const option = await screen.findByRole('option', { name: /src\/App\.tsx/i })
+    await userEvent.click(option)
+    // Vira chip de contexto (vinculada) e o token entra no texto.
+    expect(await screen.findByRole('button', { name: /Remover src\/App\.tsx/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/Descreva a tarefa/i)).toHaveValue('ver @src/App.tsx ')
+  })
+
+  it('token @ digitado à mão NÃO anexa referência (só escolha explícita)', async () => {
+    const onSubmit = vi.fn()
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={vi.fn()}
+        onSuggestContext={vi.fn().mockResolvedValue([])}
+        onClose={() => {}}
+        onSubmitNewTask={onSubmit}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    await userEvent.type(screen.getByLabelText(/Descreva a tarefa/i), 'analise @src/x.ts manualmente')
+    // Nenhuma chip criada por digitação manual.
+    expect(screen.queryByRole('button', { name: /Remover/i })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /executar de verdade/i }))
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'codex', contextRefs: undefined })
+    )
+  })
+
+  it('paleta / lista comandos; /skill /plan /goal aparecem desabilitados', async () => {
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={vi.fn()}
+        onSuggestContext={vi.fn().mockResolvedValue([])}
+        onClose={() => {}}
+        onSubmitNewTask={vi.fn()}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    await userEvent.type(screen.getByLabelText(/Descreva a tarefa/i), '/')
+    expect(await screen.findByRole('option', { name: /\/arquivo/i })).toBeEnabled()
+    expect(screen.getByRole('option', { name: /\/pasta/i })).toBeEnabled()
+    // Comandos futuros: visíveis mas NÃO funcionais.
+    expect(screen.getByRole('option', { name: /\/skill/i })).toBeDisabled()
+    expect(screen.getByRole('option', { name: /\/plan/i })).toBeDisabled()
+    expect(screen.getByRole('option', { name: /\/goal/i })).toBeDisabled()
+  })
+
+  it('/arquivo abre o seletor nativo (atalho local, não comando do provider)', async () => {
+    const pick = vi.fn().mockResolvedValue({ status: 'cancelled' })
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={pick}
+        onSuggestContext={vi.fn().mockResolvedValue([])}
+        onClose={() => {}}
+        onSubmitNewTask={vi.fn()}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    await userEvent.type(screen.getByLabelText(/Descreva a tarefa/i), '/arquivo ')
+    expect(pick).toHaveBeenCalledWith('file')
+  })
+
+  it('imagem colada exibe aviso e NÃO anexa', async () => {
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={vi.fn()}
+        onSuggestContext={vi.fn().mockResolvedValue([])}
+        onClose={() => {}}
+        onSubmitNewTask={vi.fn()}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    const textarea = screen.getByLabelText(/Descreva a tarefa/i)
+    fireEvent.paste(textarea, { clipboardData: { items: [{ type: 'image/png' }], files: [] } })
+    expect(screen.getAllByText(/ainda não são suportadas/i).length).toBeGreaterThan(0)
+    expect(textarea).toHaveValue('') // nada foi anexado ao texto
+  })
+})
+
+describe('RunResultPanel — resultado auditável (Fase 2B.1)', () => {
+  const baseResult: RunResult = {
+    provider: 'codex_cli',
+    cliVersion: 'codex-cli 0.144.5',
+    model: null,
+    finalMessage: 'Resposta final completa da IA, com várias linhas.\nSegunda linha.',
+    startedAt: 1000,
+    finishedAt: 4000,
+    exitCode: 0,
+    cancelled: false,
+    preExistingGitChanges: true,
+    changedFiles: [
+      { path: 'LUTHOR_SMOKE.md', status: '??', preExisting: false },
+      { path: 'existing.ts', status: 'M', preExisting: true }
+    ],
+    changedFilesTruncated: false,
+    usage: null
+  }
+
+  function makeRealSnapshot(overrides: Partial<RunResult> = {}): RunSnapshot {
+    const snap = createSeedSnapshot()
+    snap.run.executor = 'codex_cli'
+    snap.run.state = 'completed'
+    snap.result = { ...baseResult, ...overrides }
+    snap.effectiveConfig = {
+      profileId: 'codex-high',
+      profileName: 'codex — padrão da CLI',
+      appliedModel: null,
+      appliedEffort: null,
+      contextRefs: [{ relPath: 'README.md', kind: 'file' }]
+    }
+    return snap
+  }
+
+  it('mostra resposta final completa, metadados e arquivos alterados', () => {
+    render(<RunResultPanel snapshot={makeRealSnapshot()} />)
+    expect(screen.getByText(/Resposta final completa da IA/)).toBeInTheDocument()
+    expect(screen.getByText(/codex-cli 0\.144\.5/)).toBeInTheDocument()
+    expect(screen.getByText(/modelo não informado pela CLI/i)).toBeInTheDocument()
+    expect(screen.getByText('LUTHOR_SMOKE.md')).toBeInTheDocument()
+    expect(screen.getByText('já existia')).toBeInTheDocument() // arquivo pré-existente
+    expect(screen.getByText(/já continha mudanças locais ANTES/i)).toBeInTheDocument()
+  })
+
+  it('uso ausente: "não informado" + link para painel oficial, sem estimar', () => {
+    render(<RunResultPanel snapshot={makeRealSnapshot({ usage: null })} />)
+    expect(screen.getByText(/Uso por run não informado pela CLI/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /painel oficial de uso/i })).toBeInTheDocument()
+  })
+
+  it('uso presente: só os números emitidos pela CLI', () => {
+    render(<RunResultPanel snapshot={makeRealSnapshot({ usage: { input_tokens: 120 } })} />)
+    expect(screen.getByText(/input_tokens: 120/)).toBeInTheDocument()
+  })
+
+  it('sem Git: resumo de arquivos indisponível', () => {
+    render(
+      <RunResultPanel
+        snapshot={makeRealSnapshot({ changedFiles: null, preExistingGitChanges: null })}
+      />
+    )
+    expect(screen.getByText(/sem repositório Git/i)).toBeInTheDocument()
+  })
+})
+
+// ── Fase 2B.1 (rodada UX): worker honesto, conclusão, execução, composer ─────
+
+function makeCodexAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: 'ag-codex',
+    runId: 'run-codex-1',
+    role: 'worker',
+    name: 'Worker Codex',
+    profileId: 'codex-cli',
+    squadId: null,
+    state: 'executing',
+    subtask: 'Documentar o projeto',
+    effort: 'low',
+    writeScope: 'writer',
+    worktreeRef: null,
+    startedAt: 1000,
+    finishedAt: null,
+    lastEventAt: 1000,
+    lastEventMessage: 'Iniciando processo Codex',
+    ...overrides
+  }
+}
+
+describe('AgentCard — run real: config efetiva e duração congelada', () => {
+  it('mostra só a config efetiva (não "codex-high"/"high")', () => {
+    render(
+      <AgentCard
+        agent={makeCodexAgent()}
+        now={5000}
+        effectiveConfigLabel="Codex CLI · padrão da CLI"
+        onSelect={vi.fn()}
+        onOpenQuestion={vi.fn()}
+      />
+    )
+    expect(screen.getByText('Codex CLI · padrão da CLI')).toBeInTheDocument()
+    expect(screen.queryByText('codex-high')).not.toBeInTheDocument()
+    expect(screen.queryByText('high')).not.toBeInTheDocument()
+  })
+
+  it('question_pending mostra "Aguardando sua resposta"', () => {
+    render(
+      <AgentCard
+        agent={makeCodexAgent({ state: 'question_pending' })}
+        now={5000}
+        effectiveConfigLabel="Codex CLI · padrão da CLI"
+        onSelect={vi.fn()}
+        onOpenQuestion={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/Aguardando sua resposta/i)).toBeInTheDocument()
+  })
+
+  it('REGRESSÃO duração: terminal congela — não muda quando "now" avança', () => {
+    const agent = makeCodexAgent({ state: 'completed', startedAt: 1000, finishedAt: 4000 })
+    const { rerender } = render(
+      <AgentCard agent={agent} now={10_000} effectiveConfigLabel="Codex CLI · padrão da CLI" onSelect={vi.fn()} onOpenQuestion={vi.fn()} />
+    )
+    expect(screen.getByText('3s')).toBeInTheDocument() // 4000-1000
+    rerender(
+      <AgentCard agent={agent} now={999_999} effectiveConfigLabel="Codex CLI · padrão da CLI" onSelect={vi.fn()} onOpenQuestion={vi.fn()} />
+    )
+    // Duração NÃO acompanha "now" após terminal.
+    expect(screen.getByText('3s')).toBeInTheDocument()
+  })
+})
+
+describe('RunCompletionPanel — conclusão compacta no Agent Office', () => {
+  function realSnap(state: RunSnapshot['run']['state'], finalMessage: string | null): RunSnapshot {
+    const snap = createSeedSnapshot()
+    snap.run.executor = 'codex_cli'
+    snap.run.state = state
+    snap.run.startedAt = 1000
+    snap.run.finishedAt = 4000
+    snap.result = {
+      provider: 'codex_cli',
+      cliVersion: 'codex-cli 0.144.6',
+      model: null,
+      finalMessage,
+      startedAt: 1000,
+      finishedAt: 4000,
+      exitCode: 0,
+      cancelled: false,
+      preExistingGitChanges: false,
+      changedFiles: [],
+      changedFilesTruncated: false,
+      usage: null
+    }
+    return snap
+  }
+
+  it('estado, duração congelada, trecho truncado e botões', () => {
+    const long = 'x'.repeat(500)
+    const onView = vi.fn()
+    const onNew = vi.fn()
+    render(
+      <RunCompletionPanel
+        snapshot={realSnap('completed', long)}
+        onViewResult={onView}
+        onNewTask={onNew}
+        onAnswerAndContinue={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/duração 3s/i)).toBeInTheDocument()
+    // Truncado: não duplica o texto inteiro (mostra reticências).
+    expect(screen.getByText(/…$/)).toBeInTheDocument()
+    expect(screen.queryByText(long)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Ver resultado completo/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Nova tarefa' })).toBeInTheDocument()
+  })
+
+  it('resposta que parece pergunta oferece "Responder e continuar deste resultado"', () => {
+    render(
+      <RunCompletionPanel
+        snapshot={realSnap('completed', 'Em qual arquivo devo adicionar as 2 linhas?')}
+        onViewResult={vi.fn()}
+        onNewTask={vi.fn()}
+        onAnswerAndContinue={vi.fn()}
+      />
+    )
+    expect(
+      screen.getByRole('button', { name: /Responder e continuar deste resultado/i })
+    ).toBeInTheDocument()
+  })
+})
+
+describe('RunDetailPage — abas contextuais (item 14)', () => {
+  afterEach(() => {
+    useRunStore.setState({ snapshot: null, lastEvent: null })
+  })
+
+  function realRunSnap(): RunSnapshot {
+    const snap = createSeedSnapshot()
+    snap.run.executor = 'codex_cli'
+    snap.steps = [] // sem plano real
+    snap.checkpoints = []
+    snap.questions = []
+    snap.events = snap.events.filter((e) => e.type !== 'user_direction')
+    snap.agents = [makeCodexAgent()]
+    return snap
+  }
+
+  it('run real sem plano: Resultado/Execução/Logs presentes; Plano/Checkpoints/Decisões ausentes', () => {
+    useRunStore.setState({ snapshot: realRunSnap() })
+    render(<RunDetailPage />)
+    expect(screen.getByRole('tab', { name: 'Resultado' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Execução' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Logs' })).toBeInTheDocument()
+    // Nunca "0 de 0 etapas verificadas" nem aba Plano vazia.
+    expect(screen.queryByRole('tab', { name: 'Plano' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Checkpoints' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Decisões' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/0 de 0 etapas/i)).not.toBeInTheDocument()
+  })
+
+  it('aba Decisões aparece quando há pergunta pendente', () => {
+    const snap = realRunSnap()
+    snap.run.state = 'awaiting_user'
+    snap.questions = [
+      {
+        id: 'q-1',
+        runId: snap.run.id,
+        agentId: 'ag-codex',
+        text: 'Em qual arquivo?',
+        options: [],
+        allowFreeText: true,
+        status: 'pending',
+        answer: null,
+        createdAt: Date.now()
+      }
+    ]
+    useRunStore.setState({ snapshot: snap })
+    render(<RunDetailPage />)
+    expect(screen.getByRole('tab', { name: 'Decisões' })).toBeInTheDocument()
+  })
+})
+
+describe('LuthorOrchestratorPanel — execução honesta, sem "0 de 0 etapas"', () => {
+  it('mostra progresso de execução real e rótulo "sem IA própria"', () => {
+    const snap = createSeedSnapshot()
+    snap.run.executor = 'codex_cli'
+    snap.steps = []
+    snap.agents = [makeCodexAgent({ state: 'executing' })]
+    render(<LuthorOrchestratorPanel snapshot={snap} />)
+    expect(screen.getByText(/sem IA própria nesta fase/i)).toBeInTheDocument()
+    expect(screen.getByText(/1 execução em andamento/i)).toBeInTheDocument()
+    expect(screen.queryByText(/0 de 0 etapas/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('RunProgressSummary — resumo agregado da barra superior', () => {
+  const makeSteps = (statuses: Array<'verified' | 'in_progress' | 'pending' | 'failed'>) =>
+    statuses.map((status, i) => ({
+      id: `s-${i + 1}`,
+      runId: 'r',
+      index: i + 1,
+      title: `Etapa ${i + 1}`,
+      status,
+      assignedAgentId: null
+    }))
+
+  const aggBlocks = (container: HTMLElement): string[] =>
+    Array.from(container.querySelectorAll('[data-agg-block]')).map(
+      (b) => b.getAttribute('data-agg-block') ?? ''
+    )
+
+  it('REGRESSÃO squad: #01 e #05 verificadas => dois PRIMEIROS blocos verdes, nunca o último', () => {
+    // Cenário real da squad: bugs 1 e 5 corrigidos, 2 e 3 em execução, 4 na fila.
+    const { container } = render(
+      <RunProgressSummary
+        steps={makeSteps(['verified', 'in_progress', 'in_progress', 'pending', 'verified'])}
+      />
+    )
+    expect(aggBlocks(container)).toEqual(['verified', 'verified', 'active', 'neutral', 'neutral'])
+    expect(
+      screen.getByRole('img', {
+        name: '2 de 5 etapas verificadas · 2 em execução · 1 na fila'
+      })
+    ).toBeInTheDocument()
+  })
+
+  it('no máximo UM indicador ciano; sem trabalho em andamento, nenhum', () => {
+    const { container } = render(
+      <RunProgressSummary steps={makeSteps(['verified', 'pending', 'pending', 'pending', 'pending'])} />
+    )
+    expect(aggBlocks(container)).toEqual(['verified', 'neutral', 'neutral', 'neutral', 'neutral'])
+  })
+
+  it('5 de 5: todos os blocos verdes', () => {
+    const { container } = render(
+      <RunProgressSummary
+        steps={makeSteps(['verified', 'verified', 'verified', 'verified', 'verified'])}
+      />
+    )
+    expect(aggBlocks(container)).toEqual(['verified', 'verified', 'verified', 'verified', 'verified'])
+    expect(screen.getByRole('img', { name: '5 de 5 etapas verificadas' })).toBeInTheDocument()
+  })
+})
+
 describe('ComposerModal — Direcionar run', () => {
   it('exclui instâncias concluídas dos destinatários', async () => {
     // Seed: Pesquisador está completed — deve ficar fora da lista.
@@ -217,10 +790,88 @@ describe('Modal — responsividade', () => {
   })
 })
 
+describe('ConnectionsPage — UX de Redetectar', () => {
+  const codexConn = {
+    id: 'codex' as const,
+    name: 'Codex',
+    status: 'configured' as const,
+    detail: 'Pronto (codex-cli 0.144.5).',
+    version: 'codex-cli 0.144.5',
+    authenticated: true,
+    binaryLabel: 'codex.exe',
+    binarySource: 'auto' as const,
+    capabilitiesSummary: ['exec --json', 'sandbox workspace-write']
+  }
+
+  afterEach(() => {
+    delete (window as { luthor?: unknown }).luthor
+  })
+
+  function stubLuthor(refresh: () => Promise<(typeof codexConn)[]>): void {
+    ;(window as { luthor?: unknown }).luthor = {
+      connections: {
+        list: async () => [codexConn],
+        refresh,
+        chooseCodexBinary: vi.fn(),
+        clearCodexBinary: vi.fn()
+      }
+    }
+  }
+
+  it('carregando: indicador pixel visível + aria-busy; sucesso: "Detecção atualizada agora"', async () => {
+    let release: (v: (typeof codexConn)[]) => void = () => {}
+    stubLuthor(() => new Promise((resolve) => (release = resolve)))
+    render(<ConnectionsPage />)
+    expect(await screen.findByText('codex-cli 0.144.5')).toBeInTheDocument()
+
+    const button = screen.getByRole('button', { name: 'Redetectar' })
+    await userEvent.click(button)
+
+    // Estado de carregamento visível, não só troca de texto.
+    expect(screen.getByTestId('connections-busy')).toBeInTheDocument()
+    expect(
+      screen.getByText('Verificando executável, versão e autenticação…')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Verificando…' })).toHaveAttribute(
+      'aria-busy',
+      'true'
+    )
+    expect(screen.getByRole('button', { name: 'Verificando…' })).toBeDisabled()
+
+    release([codexConn])
+    expect(await screen.findByText('Detecção atualizada agora.')).toBeInTheDocument()
+    // Versão, auth e capacidades continuam visíveis após atualizar.
+    expect(screen.getByText('codex-cli 0.144.5')).toBeInTheDocument()
+    expect(screen.getByText('autenticado')).toBeInTheDocument()
+    expect(screen.getByText(/sandbox workspace-write/)).toBeInTheDocument()
+  })
+
+  it('falha: aviso coral com a razão — nunca silencioso', async () => {
+    stubLuthor(async () => {
+      throw new Error('Codex foi encontrado no terminal, mas o atalho do NVM não pode ser executado')
+    })
+    render(<ConnectionsPage />)
+    await screen.findByText('codex-cli 0.144.5')
+    await userEvent.click(screen.getByRole('button', { name: 'Redetectar' }))
+
+    const feedback = await screen.findByTestId('connections-feedback')
+    expect(feedback.textContent).toMatch(/atalho do NVM/)
+    expect(feedback.className).toContain('text-alert')
+  })
+})
+
 describe('AgentOfficePage — estados do run', () => {
   afterEach(() => {
     useRunStore.setState({ snapshot: null, lastEvent: null })
   })
+
+  const renderOffice = (): void => {
+    render(
+      <MemoryRouter>
+        <AgentOfficePage />
+      </MemoryRouter>
+    )
+  }
 
   const withRunState = (state: RunSnapshot['run']['state']): RunSnapshot => {
     const snap = createSeedSnapshot()
@@ -228,9 +879,20 @@ describe('AgentOfficePage — estados do run', () => {
     return snap
   }
 
+  it('ESTADO LIMPO (sem run): CTA Abrir workspace + Nova tarefa, sem demo', () => {
+    useRunStore.setState({ snapshot: null })
+    renderOffice()
+    expect(screen.getByText(/Nenhum run ativo/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Abrir workspace' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Nova tarefa' })).toBeInTheDocument()
+    // Nenhum conteúdo demonstrativo ("Fase 1 · simulado", agentes fictícios).
+    expect(screen.queryByText(/fase 1 · simulado/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('Pesquisador')).not.toBeInTheDocument()
+  })
+
   it('run ativo mostra "Pausar tudo", "Nova tarefa" e "Direcionar run"', () => {
     useRunStore.setState({ snapshot: withRunState('running') })
-    render(<AgentOfficePage />)
+    renderOffice()
     expect(screen.getByRole('button', { name: 'Pausar tudo' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Nova tarefa' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Direcionar run' })).toBeInTheDocument()
@@ -240,7 +902,7 @@ describe('AgentOfficePage — estados do run', () => {
     'run %s: sem "Pausar tudo"/"Direcionar run", mas "Nova tarefa" e continuação presentes',
     (state) => {
       useRunStore.setState({ snapshot: withRunState(state) })
-      render(<AgentOfficePage />)
+      renderOffice()
       expect(screen.queryByRole('button', { name: 'Pausar tudo' })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Direcionar run' })).not.toBeInTheDocument()
       // "Nova tarefa" é persistente: caminho permanente para o orquestrador.

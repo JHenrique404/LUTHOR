@@ -17,8 +17,12 @@ import type {
  */
 const api: LuthorApi = {
   workspaces: {
-    list: () => ipcRenderer.invoke(IpcChannels.workspaceList),
-    openDialog: () => ipcRenderer.invoke(IpcChannels.workspaceOpenDialog)
+    state: () => ipcRenderer.invoke(IpcChannels.workspaceState),
+    openDialog: () => ipcRenderer.invoke(IpcChannels.workspaceOpenDialog),
+    setActive: (workspaceId: string) =>
+      ipcRenderer.invoke(IpcChannels.workspaceSetActive, workspaceId),
+    remove: (workspaceId: string) => ipcRenderer.invoke(IpcChannels.workspaceRemove, workspaceId),
+    removeDemos: () => ipcRenderer.invoke(IpcChannels.workspaceRemoveDemos)
   },
   run: {
     snapshot: () => ipcRenderer.invoke(IpcChannels.runSnapshot)
@@ -26,6 +30,7 @@ const api: LuthorApi = {
   sim: {
     pauseAll: () => ipcRenderer.invoke(IpcChannels.simPauseAll),
     resumeAll: () => ipcRenderer.invoke(IpcChannels.simResumeAll),
+    cancelRun: () => ipcRenderer.invoke(IpcChannels.simCancelRun),
     pauseAgent: (agentId: string) => ipcRenderer.invoke(IpcChannels.simPauseAgent, agentId),
     resumeAgent: (agentId: string) => ipcRenderer.invoke(IpcChannels.simResumeAgent, agentId),
     answerQuestion: (input: AnswerQuestionInput) =>
@@ -50,7 +55,17 @@ const api: LuthorApi = {
     remove: (profileId: string) => ipcRenderer.invoke(IpcChannels.profileDelete, profileId)
   },
   connections: {
-    list: () => ipcRenderer.invoke(IpcChannels.connectionsList)
+    list: () => ipcRenderer.invoke(IpcChannels.connectionsList),
+    refresh: () => ipcRenderer.invoke(IpcChannels.connectionsRefresh),
+    chooseCodexBinary: () => ipcRenderer.invoke(IpcChannels.codexChooseBinary),
+    clearCodexBinary: () => ipcRenderer.invoke(IpcChannels.codexClearBinary)
+  },
+  codex: {
+    capabilities: () => ipcRenderer.invoke(IpcChannels.codexCapabilities),
+    pickContext: (kind: 'file' | 'folder') =>
+      ipcRenderer.invoke(IpcChannels.codexPickContext, { kind }),
+    suggestContext: (query: string) =>
+      ipcRenderer.invoke(IpcChannels.codexSuggestContext, { query })
   }
 }
 
