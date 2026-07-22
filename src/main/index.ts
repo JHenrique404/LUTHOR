@@ -2,7 +2,6 @@ import { join } from 'node:path'
 import { app, BrowserWindow, dialog, Menu, Notification, shell, Tray } from 'electron'
 import { IpcChannels } from '@shared/ipc/contract'
 import { createRepository } from './services/db/in-memory-repository'
-import { createSeedWorkspaces } from './services/db/seed'
 import { createProviders } from './services/integrations/agent-provider'
 import { JsonWorkspaceRegistry } from './services/workspaces/workspace-registry'
 import { WorkspaceService } from './services/workspaces/workspace-service'
@@ -43,11 +42,12 @@ async function bootstrap(): Promise<void> {
   const providers = createProviders(codexDetector)
   const seedSnapshot = await repository.getRunSnapshot()
 
-  // Registro PERSISTENTE de workspaces (Fase 2A): JSON versionado com
-  // migrações em userData. Seeds demo só na primeira execução.
+  // Registro PERSISTENTE de workspaces (Fase 2A): JSON versionado com migrações.
+  // Instalação NOVA abre limpa (sem workspaces demo). Demos antigas persistidas
+  // são preservadas até o usuário usar "Remover demonstrações".
   const workspaceRegistry = await JsonWorkspaceRegistry.open({
     dir: app.getPath('userData'),
-    seed: () => createSeedWorkspaces()
+    seed: () => []
   })
 
   let mainWindow: BrowserWindow | null = null
@@ -208,7 +208,9 @@ async function bootstrap(): Promise<void> {
     return { action: 'deny' }
   })
 
-  mainWindow.webContents.on('did-finish-load', () => engine.start())
+  // Sem run demo automático: a Agent Office abre limpa. A simulação só roda
+  // quando o usuário cria uma "Nova tarefa" (modo simulado). O executor real
+  // Codex roda seu próprio processo.
 
   // ── Bandeja do Windows ─────────────────────────────────────────────────
   tray = new Tray(createTrayIcon())

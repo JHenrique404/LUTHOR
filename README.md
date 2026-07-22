@@ -1,8 +1,10 @@
 # LUTHOR
 
-Central de comando local (desktop, Windows) para orquestrar projetos e agentes de IA.
-Você abre um workspace, envia uma tarefa para um orquestrador pai e acompanha os agentes
-delegados (Frontend, Backend, Pesquisador, Verificador) em uma "Agent Office" pixel-art.
+Central de comando local (desktop, Windows) para trabalho real em projetos com o
+executor **Codex CLI**. Você abre um workspace real, cria uma tarefa e acompanha a
+execução em uma "Agent Office" pixel-art. Instalação nova abre **limpa** (sem
+conteúdo demonstrativo) — o CTA é **Abrir workspace**. Modos simulados existem
+apenas para explorar a interface sem chamar IA.
 
 > **Fase 2B — primeiro executor REAL via Codex CLI (concluída).**
 > "Nova tarefa" agora oferece o modo **Executor Codex (real)**: um único processo
@@ -85,6 +87,30 @@ delegados (Frontend, Backend, Pesquisador, Verificador) em uma "Agent Office" pi
   execução com tarefa original + resposta + contexto limitado), sem depender de
   `resume` não verificado da CLI. Runs antigos com pergunta não estruturada têm
   "Responder e continuar deste resultado" (prefill, sem retomar o processo).
+
+## Produto focado em workspaces reais (rodada 2B.1c)
+
+- **Instalação nova = estado limpo**: nenhum workspace demo, run simulado ou
+  agente fictício é criado automaticamente; a Agent Office abre com o CTA
+  **Abrir workspace** / **Nova tarefa**. O `SimulationEngine` e as fixtures
+  seguem só para testes/dev. Demos antigas persistidas são preservadas e
+  removíveis com **"Remover demonstrações"** (só registros `origin: demo`;
+  projetos reais nunca são tocados).
+- **Timer terminal congelado de verdade**: além do helper de domínio, as
+  origens renderizadas (`AgentCard`, `SquadCard`, aba de execução do Run) usam
+  `formatDuration(startedAt, finishedAt, terminal, now)` — item terminal nunca
+  usa `now`. Verificado por smoke visual: um agente concluído manteve `13m00s`
+  por ~73s enquanto os ativos avançaram.
+- **Referências no texto + paleta `/`**: a escolha por `@` autocomplete ou pelo
+  diálogo insere um token legível (`@src/teste.ts`) na frase, vinculado à chip;
+  remover a chip remove o token; digitar `@algo` à mão NÃO anexa. A barra `/`
+  abre a paleta local do Composer — `/arquivo` e `/pasta` funcionam; `/skill`,
+  `/plan`, `/goal` aparecem preparados mas desabilitados (não fingem funcionar).
+- **Abas contextuais do Run**: principais **Resultado · Execução · Logs**;
+  **Plano** só com plano real, **Agentes** só com múltiplas instâncias,
+  **Decisões** (ex-"Perguntas") só com pergunta/resposta/continuação,
+  **Checkpoints** só com marco real. Áreas que podem ficar vazias explicam para
+  que servem.
 
 ## Stack
 

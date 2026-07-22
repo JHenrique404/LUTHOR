@@ -13,6 +13,7 @@ import { RunResultPanel } from '@renderer/components/office/RunResultPanel'
 import { RunCompletionPanel } from '@renderer/components/office/RunCompletionPanel'
 import { LuthorOrchestratorPanel } from '@renderer/components/office/LuthorOrchestratorPanel'
 import { AgentOfficePage } from '@renderer/pages/AgentOfficePage'
+import { RunDetailPage } from '@renderer/pages/RunDetailPage'
 import { ConnectionsPage } from '@renderer/pages/ConnectionsPage'
 import { useRunStore } from '@renderer/stores/run-store'
 import { createSeedSnapshot, createSquadRunParts } from '../src/main/services/db/seed'
@@ -282,7 +283,8 @@ describe('ComposerModal — contexto e capacidades Codex (Fase 2B.1)', () => {
     await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
 
     await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
-    expect(await screen.findByText(/@src\/a\.ts/)).toBeInTheDocument()
+    // Chip vinculada (identificada pelo botão de remover, único).
+    expect(await screen.findByRole('button', { name: /Remover src\/a\.ts/i })).toBeInTheDocument()
 
     // segunda seleção bloqueada mostra a razão
     await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
@@ -306,9 +308,9 @@ describe('ComposerModal — contexto e capacidades Codex (Fase 2B.1)', () => {
     renderCodexComposer(pick)
     await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
     await userEvent.click(screen.getByRole('button', { name: '+ @arquivo' }))
-    expect(await screen.findByText(/@src\/a\.ts/)).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Remover src\/a\.ts/i })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Remover src\/a\.ts/i }))
-    expect(screen.queryByText(/@src\/a\.ts/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Remover src\/a\.ts/i })).not.toBeInTheDocument()
   })
 
   it('autocomplete @: sugere sob demanda e a seleção vira chip', async () => {
@@ -333,8 +335,58 @@ describe('ComposerModal — contexto e capacidades Codex (Fase 2B.1)', () => {
     expect(suggest).toHaveBeenCalled()
     const option = await screen.findByRole('option', { name: /src\/App\.tsx/i })
     await userEvent.click(option)
-    // Vira chip de contexto.
-    expect(screen.getByText(/@src\/App\.tsx/)).toBeInTheDocument()
+    // Vira chip de contexto (vinculada) e o token entra no texto.
+    expect(await screen.findByRole('button', { name: /Remover src\/App\.tsx/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/Descreva a tarefa/i)).toHaveValue('ver @src/App.tsx ')
+  })
+
+  it('token @ digitado à mão NÃO anexa referência (só escolha explícita)', async () => {
+    const onSubmit = vi.fn()
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={vi.fn()}
+        onSuggestContext={vi.fn().mockResolvedValue([])}
+        onClose={() => {}}
+        onSubmitNewTask={onSubmit}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    await userEvent.type(screen.getByLabelText(/Descreva a tarefa/i), 'analise @src/x.ts manualmente')
+    // Nenhuma chip criada por digitação manual.
+    expect(screen.queryByRole('button', { name: /Remover/i })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /executar de verdade/i }))
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'codex', contextRefs: undefined })
+    )
+  })
+
+  it('paleta / lista comandos; /skill /plan /goal aparecem desabilitados', async () => {
+    render(
+      <ComposerModal
+        kind="new_task"
+        agents={snapshot.agents}
+        codexAvailability={{ ok: true }}
+        codexCapabilities={codexCaps}
+        onPickContext={vi.fn()}
+        onSuggestContext={vi.fn().mockResolvedValue([])}
+        onClose={() => {}}
+        onSubmitNewTask={vi.fn()}
+        onSubmitInstruction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByLabelText(/EXECUTOR CODEX/i))
+    await userEvent.type(screen.getByLabelText(/Descreva a tarefa/i), '/')
+    expect(await screen.findByRole('option', { name: /\/arquivo/i })).toBeEnabled()
+    expect(screen.getByRole('option', { name: /\/pasta/i })).toBeEnabled()
+    // Comandos futuros: visíveis mas NÃO funcionais.
+    expect(screen.getByRole('option', { name: /\/skill/i })).toBeDisabled()
+    expect(screen.getByRole('option', { name: /\/plan/i })).toBeDisabled()
+    expect(screen.getByRole('option', { name: /\/goal/i })).toBeDisabled()
   })
 
   it('/arquivo abre o seletor nativo (atalho local, não comando do provider)', async () => {
@@ -569,6 +621,57 @@ describe('RunCompletionPanel — conclusão compacta no Agent Office', () => {
   })
 })
 
+describe('RunDetailPage — abas contextuais (item 14)', () => {
+  afterEach(() => {
+    useRunStore.setState({ snapshot: null, lastEvent: null })
+  })
+
+  function realRunSnap(): RunSnapshot {
+    const snap = createSeedSnapshot()
+    snap.run.executor = 'codex_cli'
+    snap.steps = [] // sem plano real
+    snap.checkpoints = []
+    snap.questions = []
+    snap.events = snap.events.filter((e) => e.type !== 'user_direction')
+    snap.agents = [makeCodexAgent()]
+    return snap
+  }
+
+  it('run real sem plano: Resultado/Execução/Logs presentes; Plano/Checkpoints/Decisões ausentes', () => {
+    useRunStore.setState({ snapshot: realRunSnap() })
+    render(<RunDetailPage />)
+    expect(screen.getByRole('tab', { name: 'Resultado' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Execução' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Logs' })).toBeInTheDocument()
+    // Nunca "0 de 0 etapas verificadas" nem aba Plano vazia.
+    expect(screen.queryByRole('tab', { name: 'Plano' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Checkpoints' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Decisões' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/0 de 0 etapas/i)).not.toBeInTheDocument()
+  })
+
+  it('aba Decisões aparece quando há pergunta pendente', () => {
+    const snap = realRunSnap()
+    snap.run.state = 'awaiting_user'
+    snap.questions = [
+      {
+        id: 'q-1',
+        runId: snap.run.id,
+        agentId: 'ag-codex',
+        text: 'Em qual arquivo?',
+        options: [],
+        allowFreeText: true,
+        status: 'pending',
+        answer: null,
+        createdAt: Date.now()
+      }
+    ]
+    useRunStore.setState({ snapshot: snap })
+    render(<RunDetailPage />)
+    expect(screen.getByRole('tab', { name: 'Decisões' })).toBeInTheDocument()
+  })
+})
+
 describe('LuthorOrchestratorPanel — execução honesta, sem "0 de 0 etapas"', () => {
   it('mostra progresso de execução real e rótulo "sem IA própria"', () => {
     const snap = createSeedSnapshot()
@@ -775,6 +878,17 @@ describe('AgentOfficePage — estados do run', () => {
     snap.run.state = state
     return snap
   }
+
+  it('ESTADO LIMPO (sem run): CTA Abrir workspace + Nova tarefa, sem demo', () => {
+    useRunStore.setState({ snapshot: null })
+    renderOffice()
+    expect(screen.getByText(/Nenhum run ativo/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Abrir workspace' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Nova tarefa' })).toBeInTheDocument()
+    // Nenhum conteúdo demonstrativo ("Fase 1 · simulado", agentes fictícios).
+    expect(screen.queryByText(/fase 1 · simulado/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('Pesquisador')).not.toBeInTheDocument()
+  })
 
   it('run ativo mostra "Pausar tudo", "Nova tarefa" e "Direcionar run"', () => {
     useRunStore.setState({ snapshot: withRunState('running') })

@@ -82,7 +82,8 @@ export function formatDuration(
   isTerminal: boolean,
   now = Date.now()
 ): string {
-  if (isTerminal && finishedAt !== null) return formatSeconds(finishedAt - startedAt)
+  // Terminal: congelado SEMPRE (nunca usa `now`, nem sem finishedAt).
+  if (isTerminal) return formatSeconds((finishedAt ?? startedAt) - startedAt)
   return formatSeconds(now - startedAt)
 }
 

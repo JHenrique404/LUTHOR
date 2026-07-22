@@ -55,8 +55,8 @@ export function App(): React.JSX.Element {
         >
           <div className="mb-4 px-2">
             <span className="font-pixel text-cyan-glow text-sm tracking-widest">LUTHOR</span>
-            <span className="font-pixel mt-1 block text-[8px] uppercase text-warn">
-              fase 2a · agentes simulados
+            <span className="font-pixel mt-1 block text-[8px] uppercase text-ink-faint">
+              workspaces · executor codex
             </span>
           </div>
           {NAV_ITEMS.map((item) => (

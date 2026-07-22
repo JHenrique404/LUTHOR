@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Agent, AgentProfile, RunEvent } from '@shared/domain'
-import { AGENT_STATE_LABELS, SIMULATED_WORKSPACE_LIMITS } from '@shared/domain'
-import { AGENT_STATE_STYLE, formatElapsed } from '@renderer/lib/state-ui'
+import { AGENT_STATE_LABELS, SIMULATED_WORKSPACE_LIMITS, isAgentTerminal } from '@shared/domain'
+import { AGENT_STATE_STYLE, formatDuration } from '@renderer/lib/state-ui'
 import { PixelBadge } from '@renderer/components/ui/PixelBadge'
 import { StatusDot } from '@renderer/components/ui/StatusDot'
 import { AgentAvatar } from './AgentAvatar'
@@ -81,7 +81,12 @@ export function SquadCard({
                     {member.subtask}
                   </span>
                   <span className="font-pixel shrink-0 text-[10px] text-ink-faint">
-                    {formatElapsed(member.startedAt, now)}
+                    {formatDuration(
+                      member.startedAt,
+                      member.finishedAt,
+                      isAgentTerminal(member.state),
+                      now
+                    )}
                   </span>
                 </button>
               </li>

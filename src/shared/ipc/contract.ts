@@ -33,6 +33,7 @@ export const IpcChannels = {
   workspaceOpenDialog: 'luthor:workspace:open-dialog',
   workspaceSetActive: 'luthor:workspace:set-active',
   workspaceRemove: 'luthor:workspace:remove',
+  workspaceRemoveDemos: 'luthor:workspace:remove-demos',
   runSnapshot: 'luthor:run:snapshot',
   simCancelRun: 'luthor:sim:cancel-run',
   simPauseAll: 'luthor:sim:pause-all',
@@ -149,9 +150,12 @@ export interface LuthorApi {
     setActive(workspaceId: string): Promise<WorkspaceMutationResult>
     /** Remove só o REGISTRO do workspace — nenhum arquivo é tocado. */
     remove(workspaceId: string): Promise<WorkspaceMutationResult>
+    /** Remove SOMENTE registros de exemplo (origin:'demo'). */
+    removeDemos(): Promise<WorkspaceMutationResult>
   }
   run: {
-    snapshot(): Promise<RunSnapshot>
+    /** null enquanto nenhum run foi iniciado (instalação/estado limpo). */
+    snapshot(): Promise<RunSnapshot | null>
   }
   sim: {
     pauseAll(): Promise<RunSnapshot>

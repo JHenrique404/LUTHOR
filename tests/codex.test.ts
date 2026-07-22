@@ -570,6 +570,14 @@ describe('RunCoordinator — um executor real por vez', () => {
     return { coordinator, proc, sim }
   }
 
+  it('instalação/estado limpo: getActiveSnapshot null até iniciar um run', async () => {
+    const { coordinator } = createCoordinator()
+    // Sem nenhum run iniciado, a Agent Office abre limpa (sem demo automático).
+    expect(coordinator.getActiveSnapshot()).toBeNull()
+    await coordinator.startNewTask({ text: 'Explorar simulado', mode: 'standard' })
+    expect(coordinator.getActiveSnapshot()).not.toBeNull()
+  })
+
   it('modo codex cria run real; snapshot ativo passa a ser o real', async () => {
     const { coordinator } = createCoordinator()
     const snapshot = await coordinator.startNewTask({ text: 'Tarefa real', mode: 'codex' })
@@ -922,8 +930,9 @@ describe('durationMs / executionSummary / parseNeedsInput', () => {
     expect(durationMs(1000, 4000, true, 999999)).toBe(3000)
     // Ativo: usa now.
     expect(durationMs(1000, null, false, 6000)).toBe(5000)
-    // Terminal sem finishedAt (defensivo): cai para now.
-    expect(durationMs(1000, null, true, 6000)).toBe(5000)
+    // Terminal sem finishedAt (defensivo): NUNCA cai para now — fica estável.
+    expect(durationMs(1000, null, true, 6000)).toBe(0)
+    expect(durationMs(1000, null, true, 999999)).toBe(0)
   })
 
   it('executionSummary honesto por estados', () => {

@@ -64,10 +64,44 @@ export function AgentOfficePage(): React.JSX.Element {
     void window.luthor?.codex?.capabilities().then(setCodexCapabilities)
   }, [])
 
+  // Estado LIMPO (instalação nova / nenhum run iniciado): sem demo automático.
   if (!snapshot) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="font-pixel anim-pulse text-xs text-ink-dim">Carregando central…</p>
+      <div className="scanlines relative flex h-full flex-col items-center justify-center gap-5 p-6 text-center">
+        <div>
+          <h1 className="font-pixel text-cyan-glow text-lg tracking-widest">AGENT OFFICE</h1>
+          <p className="mt-2 max-w-md text-sm text-ink-dim">
+            Nenhum run ativo. Abra um workspace e crie uma <strong>Nova tarefa</strong> — simulada
+            para explorar, ou pelo <span className="text-exec">Executor Codex</span> para trabalho
+            real dentro do workspace.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <PixelButton variant="primary" onClick={() => navigate('/')}>
+            Abrir workspace
+          </PixelButton>
+          <PixelButton variant="orch" onClick={() => setComposer({ kind: 'new_task' })}>
+            Nova tarefa
+          </PixelButton>
+        </div>
+        {composer && (
+          <ComposerModal
+            kind={composer.kind}
+            agents={[]}
+            continuedFromRunId={composer.continuedFromRunId}
+            prefillText={composer.prefillText}
+            codexAvailability={codexAvailability}
+            codexCapabilities={codexCapabilities}
+            onPickContext={(k) =>
+              window.luthor?.codex?.pickContext(k) ??
+              Promise.resolve({ status: 'cancelled' as const })
+            }
+            onSuggestContext={(q) => window.luthor?.codex?.suggestContext(q) ?? Promise.resolve([])}
+            onClose={() => setComposer(null)}
+            onSubmitNewTask={(input) => void startNewTask(input)}
+            onSubmitInstruction={(input) => void addUserDirection(input)}
+          />
+        )}
       </div>
     )
   }

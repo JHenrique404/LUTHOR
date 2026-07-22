@@ -21,7 +21,8 @@ const api: LuthorApi = {
     openDialog: () => ipcRenderer.invoke(IpcChannels.workspaceOpenDialog),
     setActive: (workspaceId: string) =>
       ipcRenderer.invoke(IpcChannels.workspaceSetActive, workspaceId),
-    remove: (workspaceId: string) => ipcRenderer.invoke(IpcChannels.workspaceRemove, workspaceId)
+    remove: (workspaceId: string) => ipcRenderer.invoke(IpcChannels.workspaceRemove, workspaceId),
+    removeDemos: () => ipcRenderer.invoke(IpcChannels.workspaceRemoveDemos)
   },
   run: {
     snapshot: () => ipcRenderer.invoke(IpcChannels.runSnapshot)

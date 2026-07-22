@@ -14,6 +14,20 @@ interface ContextRef {
   kind: 'file' | 'folder'
 }
 
+/** Token textual legível de uma referência (@relPath, pastas com "/"). */
+function refToken(ref: ContextRef): string {
+  return ref.kind === 'folder' ? `@${ref.relPath.replace(/\/$/, '')}/` : `@${ref.relPath}`
+}
+
+/** Comandos locais do Composer (barra "/"). Não são comandos do provider. */
+const SLASH_COMMANDS: Array<{ id: string; label: string; hint: string; enabled: boolean }> = [
+  { id: 'arquivo', label: '/arquivo', hint: 'Anexar arquivo (seletor nativo)', enabled: true },
+  { id: 'pasta', label: '/pasta', hint: 'Anexar pasta (seletor nativo)', enabled: true },
+  { id: 'skill', label: '/skill', hint: 'Skills seguras — em breve', enabled: false },
+  { id: 'plan', label: '/plan', hint: 'Modo plano — em breve', enabled: false },
+  { id: 'goal', label: '/goal', hint: 'Objetivos — em breve', enabled: false }
+]
+
 interface ComposerModalProps {
   kind: ComposerKind
   agents: Agent[]
@@ -50,6 +64,11 @@ const DIRECTABLE_STATES = [
   'paused'
 ]
 
+type Dropdown =
+  | { kind: 'context'; items: ContextRef[]; tokenStart: number; tokenEnd: number }
+  | { kind: 'slash'; query: string; tokenStart: number; tokenEnd: number }
+  | null
+
 /**
  * Composer: "Nova tarefa" cria um NOVO run (simulado ou executor real Codex);
  * "Direcionar run" registra instrução no run atual (simulado).
@@ -74,12 +93,10 @@ export function ComposerModal({
   const [agentId, setAgentId] = useState(directableWorkers[0]?.id ?? '')
   const [text, setText] = useState(prefillText ?? '')
   const [mode, setMode] = useState<NewTaskInput['mode']>('standard')
-  // Modelo só é selecionável quando a CLI enumera modelos de verdade.
   const [model, setModel] = useState('')
   const [contextRefs, setContextRefs] = useState<ContextRef[]>([])
   const [contextError, setContextError] = useState<string | null>(null)
-  const [suggestions, setSuggestions] = useState<ContextRef[]>([])
-  const [suggestOpen, setSuggestOpen] = useState(false)
+  const [dropdown, setDropdown] = useState<Dropdown>(null)
   const [imageWarning, setImageWarning] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -90,63 +107,120 @@ export function ComposerModal({
 
   const enumeratedModels = codexCapabilities?.availableModels ?? []
   const canSelectModel = enumeratedModels.length > 0
+  const codexMode = isNewTask && mode === 'codex'
   const IMAGE_NOTICE =
     'Imagens ainda não são suportadas pelo executor Codex desta fase. Nada será enviado ou descartado silenciosamente.'
 
-  const addRef = (ref: ContextRef): void => {
+  /** Só a escolha explícita cria a referência efetiva enviada ao executor. */
+  const addRef = (ref: ContextRef, tokenStart?: number, tokenEnd?: number): void => {
     setContextRefs((refs) =>
       refs.some((r) => r.relPath === ref.relPath && r.kind === ref.kind) ? refs : [...refs, ref]
     )
+    // Insere o token textual legível, integrado à frase.
+    setText((prev) => {
+      const token = refToken(ref)
+      if (tokenStart !== undefined && tokenEnd !== undefined) {
+        const before = prev.slice(0, tokenStart)
+        const after = prev.slice(tokenEnd)
+        // Espaço após o token para o usuário continuar a frase.
+        const sep = after === '' ? ' ' : after.startsWith(' ') ? '' : ' '
+        return `${before}${token}${sep}${after}`
+      }
+      // Sem posição (veio do botão): anexa ao fim.
+      const sep = prev.length === 0 || prev.endsWith(' ') ? '' : ' '
+      return `${prev}${sep}${token} `
+    })
+    setDropdown(null)
+    textareaRef.current?.focus()
   }
 
-  const addContext = async (refKind: 'file' | 'folder'): Promise<void> => {
+  const pickNative = async (
+    refKind: 'file' | 'folder',
+    tokenStart?: number,
+    tokenEnd?: number
+  ): Promise<void> => {
     setContextError(null)
     if (!onPickContext) return
     const result = await onPickContext(refKind)
-    if (result.status === 'ok') addRef(result.ref)
+    if (result.status === 'ok') addRef(result.ref, tokenStart, tokenEnd)
     else if (result.status === 'blocked' || result.status === 'no_workspace')
       setContextError(result.message)
   }
 
+  /**
+   * Remover chip: tira o token correspondente do texto quando ainda presente
+   * verbatim; se o texto foi editado (token ausente), remove só a chip.
+   */
   const removeContext = (ref: ContextRef): void => {
     setContextRefs((refs) => refs.filter((r) => !(r.relPath === ref.relPath && r.kind === ref.kind)))
+    const token = refToken(ref)
+    setText((prev) => {
+      const idx = prev.indexOf(token)
+      if (idx < 0) return prev // texto editado: não mexe destrutivamente
+      const after = prev.slice(idx + token.length)
+      const trimmedAfter = after.startsWith(' ') ? after.slice(1) : after
+      return `${prev.slice(0, idx)}${trimmedAfter}`
+    })
   }
 
-  /** Token `@…` ativo no fim do texto (sem espaço). null se não houver. */
-  const activeAtToken = (value: string): string | null => {
-    const m = /(?:^|\s)@([^\s@]*)$/.exec(value)
-    return m ? m[1] : null
+  /** Detecta o token ativo (@… ou /…) imediatamente antes do caret. */
+  const detectToken = (
+    value: string,
+    caret: number
+  ): { trigger: '@' | '/'; query: string; start: number; end: number } | null => {
+    const upto = value.slice(0, caret)
+    const m = /(^|\s)([@/])([^\s@/]*)$/.exec(upto)
+    if (!m) return null
+    const trigger = m[2] as '@' | '/'
+    const query = m[3]
+    const start = caret - query.length - 1
+    return { trigger, query, start, end: caret }
   }
 
-  const onTextChange = async (value: string): Promise<void> => {
-    // Atalhos locais do composer (NÃO comandos do provider): /arquivo /pasta.
-    const slash = /(?:^|\s)(\/arquivo|\/pasta)\s$/.exec(value)
-    if (slash) {
-      const stripped = value.replace(/(\/arquivo|\/pasta)\s$/, '').trimEnd()
+  const onTextChange = async (value: string, caret: number): Promise<void> => {
+    // Atalho: "/arquivo " ou "/pasta " (com espaço) executa direto.
+    const done = /(^|\s)\/(arquivo|pasta)\s$/.exec(value)
+    if (done) {
+      const stripped = value.replace(/\/(arquivo|pasta)\s$/, '').trimEnd()
+      const at = stripped.length + (stripped.length && !stripped.endsWith(' ') ? 1 : 0)
       setText(stripped)
-      await addContext(slash[1] === '/pasta' ? 'folder' : 'file')
+      setDropdown(null)
+      await pickNative(done[2] === 'pasta' ? 'folder' : 'file', at, at)
       return
     }
     setText(value)
-    // Autocomplete `@`: só com executor Codex e capacidade de referências.
-    if (isNewTask && mode === 'codex' && onSuggestContext) {
-      const token = activeAtToken(value)
-      if (token !== null) {
-        const list = await onSuggestContext(token)
-        setSuggestions(list.slice(0, 20))
-        setSuggestOpen(true)
-        return
-      }
+    const token = detectToken(value, caret)
+    if (!token) {
+      setDropdown(null)
+      return
     }
-    setSuggestOpen(false)
+    if (token.trigger === '/') {
+      setDropdown({ kind: 'slash', query: token.query, tokenStart: token.start, tokenEnd: token.end })
+      return
+    }
+    // '@' só busca contexto no modo Codex com capacidade de referências.
+    if (codexMode && codexCapabilities?.supportsFileReferences && onSuggestContext) {
+      const list = await onSuggestContext(token.query)
+      setDropdown({
+        kind: 'context',
+        items: list.slice(0, 20),
+        tokenStart: token.start,
+        tokenEnd: token.end
+      })
+      return
+    }
+    setDropdown(null)
   }
 
-  /** Insere a referência escolhida e remove o token `@…` do texto. */
-  const chooseSuggestion = (ref: ContextRef): void => {
-    addRef(ref)
-    setText((v) => v.replace(/(?:^|\s)@([^\s@]*)$/, (match) => (/^\s/.test(match) ? match[0] : '')))
-    setSuggestOpen(false)
-    textareaRef.current?.focus()
+  const runSlashCommand = async (id: string): Promise<void> => {
+    if (dropdown?.kind !== 'slash') return
+    const { tokenStart, tokenEnd } = dropdown
+    // Remove o texto "/cmd" antes de abrir o seletor.
+    setText((prev) => `${prev.slice(0, tokenStart)}${prev.slice(tokenEnd)}`)
+    setDropdown(null)
+    if (id === 'arquivo') await pickNative('file', tokenStart, tokenStart)
+    else if (id === 'pasta') await pickNative('folder', tokenStart, tokenStart)
+    // skill/plan/goal: preparados, não funcionais nesta rodada.
   }
 
   const showImageNotice = (): void => setImageWarning(IMAGE_NOTICE)
@@ -162,8 +236,9 @@ export function ComposerModal({
         text: text.trim(),
         mode,
         continuedFromRunId,
-        codexModel: mode === 'codex' && canSelectModel && model ? model : undefined,
-        contextRefs: mode === 'codex' && contextRefs.length > 0 ? contextRefs : undefined
+        codexModel: codexMode && canSelectModel && model ? model : undefined,
+        // Referências EFETIVAS = chips (escolha explícita), nunca o texto cru.
+        contextRefs: codexMode && contextRefs.length > 0 ? contextRefs : undefined
       })
     } else {
       onSubmitInstruction({
@@ -175,6 +250,11 @@ export function ComposerModal({
     }
     onClose()
   }
+
+  const slashItems =
+    dropdown?.kind === 'slash'
+      ? SLASH_COMMANDS.filter((c) => c.id.startsWith(dropdown.query.toLowerCase()))
+      : []
 
   return (
     <Modal open onClose={onClose} title={title}>
@@ -246,13 +326,12 @@ export function ComposerModal({
           </fieldset>
         )}
 
-        {isNewTask && mode === 'codex' && (
+        {codexMode && (
           <fieldset className="space-y-3">
             <legend className="font-pixel mb-1 text-[10px] uppercase text-ink-faint">
               Executor de execução real
             </legend>
 
-            {/* Resumo honesto do que será usado — sem opções inexistentes. */}
             <dl className="pixel-frame-inset space-y-1 bg-night-950 p-3 text-[11px] [--px-border:var(--color-exec)]">
               <div className="flex justify-between gap-2">
                 <dt className="text-ink-faint">Executor</dt>
@@ -293,17 +372,16 @@ export function ComposerModal({
               </label>
             )}
 
-            {/* Contexto: @arquivo / @pasta limitados ao workspace. */}
             {codexCapabilities?.supportsFileReferences && (
               <div className="space-y-2">
                 <span className="font-pixel block text-[9px] uppercase text-ink-faint">
                   Contexto (arquivos/pastas do workspace)
                 </span>
                 <div className="flex flex-wrap gap-2">
-                  <PixelButton variant="ghost" onClick={() => void addContext('file')}>
+                  <PixelButton variant="ghost" onClick={() => void pickNative('file')}>
                     + @arquivo
                   </PixelButton>
-                  <PixelButton variant="ghost" onClick={() => void addContext('folder')}>
+                  <PixelButton variant="ghost" onClick={() => void pickNative('folder')}>
                     + @pasta
                   </PixelButton>
                 </div>
@@ -319,12 +397,7 @@ export function ComposerModal({
                         key={`${ref.kind}:${ref.relPath}`}
                         className="pixel-frame flex items-center gap-1 px-2 py-1 text-xs [--px-border:var(--color-cyan-glow)]"
                       >
-                        <span className="font-logs truncate text-cyan-glow">
-                          {`@${ref.relPath}`}
-                          <span className="ml-1 text-[9px] text-ink-faint">
-                            {ref.kind === 'folder' ? 'pasta' : 'arquivo'}
-                          </span>
-                        </span>
+                        <span className="font-logs truncate text-cyan-glow">{refToken(ref)}</span>
                         <button
                           type="button"
                           onClick={() => removeContext(ref)}
@@ -338,16 +411,15 @@ export function ComposerModal({
                   </ul>
                 )}
                 <p className="text-[10px] leading-relaxed text-ink-faint">
-                  Digite <code className="text-ink-dim">@</code> para buscar,{' '}
-                  <code className="text-ink-dim">/arquivo</code> ou{' '}
-                  <code className="text-ink-dim">/pasta</code> para o seletor nativo. Só itens
-                  escolhidos viram referência — caminho digitado à mão não anexa nada. .env, chaves,
-                  .git, node_modules, binários e arquivos grandes são bloqueados.
+                  Digite <code className="text-ink-dim">@</code> para buscar ou{' '}
+                  <code className="text-ink-dim">/</code> para os comandos. O token aparece na
+                  frase e fica vinculado à chip. Caminho digitado à mão NÃO anexa — só a escolha
+                  explícita. .env, chaves, .git, node_modules, binários e arquivos grandes são
+                  bloqueados.
                 </p>
               </div>
             )}
 
-            {/* Imagens: controle desabilitado + aviso honesto. */}
             <div className="space-y-1">
               <PixelButton
                 variant="ghost"
@@ -426,7 +498,11 @@ export function ComposerModal({
             <textarea
               ref={textareaRef}
               value={text}
-              onChange={(e) => void onTextChange(e.target.value)}
+              onChange={(e) => void onTextChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+              onKeyUp={(e) => {
+                const el = e.currentTarget
+                void onTextChange(el.value, el.selectionStart ?? el.value.length)
+              }}
               onPaste={(e) => {
                 if (Array.from(e.clipboardData.items).some((i) => i.type.startsWith('image/'))) {
                   e.preventDefault()
@@ -442,32 +518,65 @@ export function ComposerModal({
               rows={4}
               placeholder={
                 isNewTask
-                  ? 'Ex.: Adicionar logout… (@ para contexto, /arquivo ou /pasta)'
+                  ? 'Ex.: Analise @src/teste.ts e faça X  (@ contexto · / comandos)'
                   : 'Ex.: Priorize cobertura de testes no middleware…'
               }
               className="pixel-frame-inset w-full resize-none bg-night-950 p-3 text-sm text-ink placeholder:text-ink-faint"
             />
           </label>
-          {suggestOpen && suggestions.length > 0 && (
+
+          {dropdown?.kind === 'context' && dropdown.items.length > 0 && (
             <ul
               role="listbox"
               aria-label="Sugestões de contexto"
               className="pixel-frame-inset absolute z-10 mt-1 max-h-48 w-full overflow-y-auto bg-night-950 [--px-border:var(--color-cyan-glow)]"
             >
-              {suggestions.map((s) => (
+              {dropdown.items.map((s) => (
                 <li key={`${s.kind}:${s.relPath}`}>
                   <button
                     type="button"
                     role="option"
                     aria-selected="false"
-                    onClick={() => chooseSuggestion(s)}
+                    onClick={() => addRef(s, dropdown.tokenStart, dropdown.tokenEnd)}
                     className="font-logs flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-[11px] text-ink-dim hover:bg-night-800 hover:text-cyan-glow"
                   >
-                    <span className="text-ink-faint">{s.kind === 'folder' ? '📁' : '📄'}</span>@
-                    {s.relPath}
+                    <span className="text-ink-faint">{s.kind === 'folder' ? '📁' : '📄'}</span>
+                    {refToken(s)}
                   </button>
                 </li>
               ))}
+            </ul>
+          )}
+
+          {dropdown?.kind === 'slash' && (
+            <ul
+              role="listbox"
+              aria-label="Comandos do Composer"
+              className="pixel-frame-inset absolute z-10 mt-1 w-full overflow-y-auto bg-night-950 [--px-border:var(--color-orch)]"
+            >
+              {slashItems.map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected="false"
+                    aria-disabled={!c.enabled}
+                    disabled={!c.enabled}
+                    onClick={() => void runSlashCommand(c.id)}
+                    className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-[11px] ${
+                      c.enabled
+                        ? 'cursor-pointer text-ink-dim hover:bg-night-800 hover:text-orch'
+                        : 'cursor-not-allowed text-ink-faint opacity-60'
+                    }`}
+                  >
+                    <span className="font-logs">{c.label}</span>
+                    <span className="text-[10px] text-ink-faint">{c.hint}</span>
+                  </button>
+                </li>
+              ))}
+              {slashItems.length === 0 && (
+                <li className="px-3 py-1.5 text-[11px] text-ink-faint">Nenhum comando.</li>
+              )}
             </ul>
           )}
         </div>

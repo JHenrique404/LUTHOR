@@ -608,6 +608,9 @@ export class CodexRunManager {
         agent.lastEventMessage = message.slice(0, 200)
       }
     }
+    // Congela SEMPRE antes de emitir: nenhum snapshot terminal sai com
+    // finishedAt null (evita a janela em que a duração ainda "corre").
+    this.freezeTerminalTimestamps(event.at)
     this.emitPayload({ event, snapshot: this.getSnapshot()! })
   }
 }

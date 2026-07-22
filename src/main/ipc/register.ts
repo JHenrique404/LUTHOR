@@ -87,8 +87,9 @@ export function registerIpcHandlers(deps: RegisterIpcDeps): void {
   ipcMain.handle(IpcChannels.workspaceRemove, (_e, workspaceId: unknown) =>
     workspaces.remove(parseIpc(WorkspaceIdSchema, workspaceId, IpcChannels.workspaceRemove))
   )
+  ipcMain.handle(IpcChannels.workspaceRemoveDemos, () => workspaces.removeDemos())
 
-  ipcMain.handle(IpcChannels.runSnapshot, () => coordinator.getSnapshot())
+  ipcMain.handle(IpcChannels.runSnapshot, () => coordinator.getActiveSnapshot())
   ipcMain.handle(IpcChannels.simPauseAll, () => coordinator.pauseAll())
   ipcMain.handle(IpcChannels.simResumeAll, () => coordinator.resumeAll())
   ipcMain.handle(IpcChannels.simCancelRun, () => coordinator.cancelRun())

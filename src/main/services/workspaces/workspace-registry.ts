@@ -37,6 +37,10 @@ export interface WorkspaceRegistry {
   setActive(workspaceId: string): Promise<Workspace>
   /** Remove só o registro. Se o ativo sair, promove o mais recente restante. */
   remove(workspaceId: string): Promise<Workspace | null>
+  /** Quantos registros de exemplo (origin: 'demo') existem. */
+  countDemos(): number
+  /** Remove SOMENTE registros origin:'demo'. Dados do usuário ficam intactos. */
+  removeDemos(): Promise<WorkspacesState>
 }
 
 /** Versão atual do arquivo persistido. Incrementar exige nova migração abaixo. */
@@ -218,6 +222,25 @@ export class JsonWorkspaceRegistry implements WorkspaceRegistry {
     }
     await this.persist()
     return promoted ? structuredClone(promoted) : null
+  }
+
+  countDemos(): number {
+    return this.data.workspaces.filter((w) => w.origin === 'demo').length
+  }
+
+  async removeDemos(): Promise<WorkspacesState> {
+    const before = this.data.workspaces.length
+    this.data.workspaces = this.data.workspaces.filter((w) => w.origin !== 'demo')
+    // Se o ativo era demo, promove o workspace real mais recente (ou null).
+    if (
+      this.data.activeWorkspaceId &&
+      !this.data.workspaces.some((w) => w.id === this.data.activeWorkspaceId)
+    ) {
+      this.data.activeWorkspaceId =
+        [...this.data.workspaces].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)[0]?.id ?? null
+    }
+    if (this.data.workspaces.length !== before) await this.persist()
+    return this.state()
   }
 
   /** Gravação atômica: escreve em .tmp e renomeia por cima (rename substitui no Windows). */

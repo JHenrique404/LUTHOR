@@ -115,6 +115,28 @@ describe('JsonWorkspaceRegistry — persistência com migrações', () => {
     expect(registry.state().workspaces).toHaveLength(2)
   })
 
+  it('INSTALAÇÃO NOVA abre limpa: sem seeds demo (produção usa seed vazio)', async () => {
+    const registry = await JsonWorkspaceRegistry.open({ dir, seed: () => [] })
+    expect(registry.state().workspaces).toHaveLength(0)
+    expect(registry.state().activeWorkspaceId).toBeNull()
+    expect(registry.countDemos()).toBe(0)
+  })
+
+  it('removeDemos apaga SÓ origin:demo; preserva workspaces do usuário', async () => {
+    const registry = await JsonWorkspaceRegistry.open({ dir, seed: createSeedWorkspaces })
+    const path = await makeProjectDir('projeto-real')
+    const { workspace } = await registry.register({ path, origin: 'user' })
+    expect(registry.countDemos()).toBe(3)
+
+    const state = await registry.removeDemos()
+    expect(state.workspaces).toHaveLength(1)
+    expect(state.workspaces[0].id).toBe(workspace.id)
+    expect(state.workspaces[0].origin).toBe('user')
+    // Ativo era demo (ws-meu-saas) → promovido ao real restante.
+    expect(state.activeWorkspaceId).toBe(workspace.id)
+    expect(registry.countDemos()).toBe(0)
+  })
+
   it('migra formato legado v0 (Fase 1) para v1', async () => {
     const legacy = {
       workspaces: [
@@ -168,6 +190,25 @@ describe('WorkspaceService — política de workspace ativo (Fase 2A)', () => {
     expect(result.alreadyRegistered).toBe(false)
     expect(result.state.activeWorkspaceId).toBe(result.workspace.id)
     expect(changes.map((w) => w.id)).toContain(result.workspace.id)
+  })
+
+  it('removeDemos remove só exemplos; run ativo bloqueia', async () => {
+    const registry = await JsonWorkspaceRegistry.open({ dir, seed: createSeedWorkspaces })
+    const path = await makeProjectDir('meu-real')
+    await registry.register({ path, origin: 'user' })
+
+    // Bloqueado com run ativo.
+    const blocked = await makeService(registry, () => true).removeDemos()
+    expect(blocked.status).toBe('error')
+    if (blocked.status === 'error') expect(blocked.code).toBe('blocked_by_active_run')
+
+    // Livre: remove os 3 demos, mantém o real.
+    const ok = await makeService(registry, () => false).removeDemos()
+    expect(ok.status).toBe('ok')
+    if (ok.status === 'ok') {
+      expect(ok.state.workspaces).toHaveLength(1)
+      expect(ok.state.workspaces[0].origin).toBe('user')
+    }
   })
 
   it('openPath com run ativo: registra sem ativar (troca bloqueada)', async () => {

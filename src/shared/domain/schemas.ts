@@ -323,7 +323,9 @@ export function durationMs(
   isTerminal: boolean,
   now: number
 ): number {
-  if (isTerminal && finishedAt !== null) return Math.max(0, finishedAt - startedAt)
+  // Terminal: SEMPRE congelado. Nunca cai para `now` (nem se finishedAt for
+  // null por algum motivo) — a duração exibida não pode crescer após terminal.
+  if (isTerminal) return Math.max(0, (finishedAt ?? startedAt) - startedAt)
   return Math.max(0, now - startedAt)
 }
 

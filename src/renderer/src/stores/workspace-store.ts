@@ -26,6 +26,7 @@ interface WorkspaceStoreState {
   openDialog: () => Promise<void>
   setActive: (workspaceId: string) => Promise<void>
   remove: (workspaceId: string) => Promise<void>
+  removeDemos: () => Promise<void>
   clearFeedback: () => void
 }
 
@@ -110,6 +111,22 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
       workspaces: result.state.workspaces,
       activeWorkspaceId: result.state.activeWorkspaceId,
       feedback: null
+    })
+    await syncRunSnapshot()
+  },
+
+  removeDemos: async () => {
+    const api = window.luthor
+    if (!api) return
+    const result = await api.workspaces.removeDemos()
+    if (result.status === 'error') {
+      set({ feedback: describeError(result) })
+      return
+    }
+    set({
+      workspaces: result.state.workspaces,
+      activeWorkspaceId: result.state.activeWorkspaceId,
+      feedback: { kind: 'notice', message: 'Exemplos demonstrativos removidos. Seus projetos reais ficaram intactos.' }
     })
     await syncRunSnapshot()
   },

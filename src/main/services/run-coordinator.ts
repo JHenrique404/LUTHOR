@@ -17,6 +17,11 @@ import type { CodexDetector } from './codex/codex-detector'
  */
 export class RunCoordinator {
   private activeKind: 'sim' | 'codex' = 'sim'
+  /**
+   * Nenhum run é exposto até o usuário criar uma "Nova tarefa". Instalação
+   * nova abre a Agent Office limpa (sem run demo simulado automático).
+   */
+  private started = false
 
   constructor(
     private readonly sim: SimulationEngine,
@@ -32,6 +37,12 @@ export class RunCoordinator {
   getSnapshot(): RunSnapshot {
     if (this.codexActive()) return this.codex.getSnapshot()!
     return this.sim.getSnapshot()
+  }
+
+  /** Snapshot exposto ao renderer: null enquanto nenhum run foi iniciado. */
+  getActiveSnapshot(): RunSnapshot | null {
+    if (!this.started && !this.codex.hasRun()) return null
+    return this.getSnapshot()
   }
 
   getRunState(): RunState {
@@ -55,6 +66,7 @@ export class RunCoordinator {
     if (this.codex.isBusy()) {
       throw new Error('Já existe um run REAL em execução — cancele-o antes de iniciar outro.')
     }
+    this.started = true
     if (input.mode === 'codex') {
       const usable = await this.detector.isUsable()
       if (!usable.ok) throw new Error(usable.reason ?? 'Codex CLI indisponível')

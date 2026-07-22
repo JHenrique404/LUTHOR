@@ -116,4 +116,19 @@ export class WorkspaceService {
     if (promoted) this.onActiveChanged(promoted)
     return { status: 'ok', state: this.registry.state() }
   }
+
+  /**
+   * Remove SOMENTE registros de exemplo (origin:'demo'). Nunca toca em
+   * workspaces reais do usuário. Bloqueada com run ativo, para evitar remover
+   * o workspace do run em andamento.
+   */
+  async removeDemos(): Promise<WorkspaceMutationResult> {
+    if (this.isRunBusy()) {
+      return { status: 'error', code: 'blocked_by_active_run', message: RUN_BUSY_MESSAGE }
+    }
+    const state = await this.registry.removeDemos()
+    const active = this.registry.getActive()
+    if (active) this.onActiveChanged(active)
+    return { status: 'ok', state }
+  }
 }

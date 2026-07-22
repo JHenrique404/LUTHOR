@@ -14,8 +14,17 @@ import { PixelPanel } from '@renderer/components/ui/PixelPanel'
  * exemplos demonstrativos ficam separados e nunca se misturam.
  */
 export function HomePage(): React.JSX.Element {
-  const { workspaces, activeWorkspaceId, feedback, init, openDialog, setActive, remove, clearFeedback } =
-    useWorkspaceStore()
+  const {
+    workspaces,
+    activeWorkspaceId,
+    feedback,
+    init,
+    openDialog,
+    setActive,
+    remove,
+    removeDemos,
+    clearFeedback
+  } = useWorkspaceStore()
   const snapshot = useRunStore((s) => s.snapshot)
   const cancelRun = useRunStore((s) => s.cancelRun)
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
@@ -107,14 +116,6 @@ export function HomePage(): React.JSX.Element {
         <span className="text-xs text-ink-faint">Escolha uma pasta local pelo diálogo do sistema.</span>
       </div>
 
-      <div className="pixel-frame bg-night-800/60 px-4 py-3 [--px-border:var(--color-cyan-glow)]">
-        <p className="text-xs leading-relaxed text-ink-dim">
-          <span className="font-pixel text-[10px] uppercase text-cyan-glow">Fase 2A · </span>
-          Nesta fase, LUTHOR apenas <strong>organiza e registra</strong> workspaces;{' '}
-          <strong>nenhum arquivo do projeto será alterado</strong>. Agentes reais chegam na Fase 2B.
-        </p>
-      </div>
-
       {feedback && (
         <div
           role="alert"
@@ -144,9 +145,8 @@ export function HomePage(): React.JSX.Element {
         <div className="pixel-frame flex flex-wrap items-center justify-between gap-3 bg-warn-soft/40 px-4 py-3 [--px-border:var(--color-warn)]">
           <p className="max-w-md text-xs leading-relaxed text-ink-dim">
             <span className="font-pixel text-[10px] uppercase text-warn">Run ativo · </span>
-            um run simulado está em andamento em{' '}
-            <strong>{snapshot?.workspace.name}</strong>. A troca de workspace com run ativo
-            (concorrência entre workspaces) chega em uma fase futura.
+            um run está em andamento em <strong>{snapshot?.workspace.name}</strong>. A troca de
+            workspace com run ativo chega em uma fase futura.
           </p>
           <PixelButton variant="danger" onClick={() => void cancelRun()}>
             Cancelar run
@@ -169,22 +169,32 @@ export function HomePage(): React.JSX.Element {
         </ul>
       </PixelPanel>
 
-      <PixelPanel title="Exemplos demonstrativos" titleAccent="var(--color-orch)">
-        <p className="mb-3 text-xs text-ink-faint">
-          Dados de exemplo da simulação — pastas fictícias, separadas dos seus projetos reais.
-          Remova quando quiser.
-        </p>
-        <ul className="space-y-2">
-          {demoWorkspaces.map(renderWorkspace)}
-          {demoWorkspaces.length === 0 && (
-            <li className="text-xs text-ink-faint">Todos os exemplos foram removidos.</li>
-          )}
-        </ul>
-      </PixelPanel>
+      {/* Exemplos demonstrativos: só aparecem se ainda existirem (demos antigas
+          persistidas). Instalação nova não tem nenhum. */}
+      {demoWorkspaces.length > 0 && (
+        <PixelPanel title="Exemplos demonstrativos" titleAccent="var(--color-orch)">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="max-w-md text-xs text-ink-faint">
+              Pastas fictícias de exemplo, separadas dos seus projetos reais. Remova quando quiser —
+              seus workspaces reais não são afetados.
+            </p>
+            <PixelButton
+              variant="danger"
+              disabled={runBusy}
+              title={runBusy ? 'Bloqueado: run ativo' : undefined}
+              onClick={() => void removeDemos()}
+            >
+              Remover demonstrações ({demoWorkspaces.length})
+            </PixelButton>
+          </div>
+          <ul className="space-y-2">{demoWorkspaces.map(renderWorkspace)}</ul>
+        </PixelPanel>
+      )}
 
       <p className="text-xs text-ink-faint">
-        Workspaces são reais e persistentes (Fase 2A); agentes, eventos e progresso seguem{' '}
-        <strong className="text-warn">simulados</strong> até a Fase 2B.
+        Workspaces são reais e persistentes; o executor <strong className="text-exec">Codex CLI</strong>{' '}
+        trabalha de verdade dentro do workspace ativo. Modos simulados existem para explorar a
+        interface sem chamar IA.
       </p>
     </div>
   )
